@@ -55,7 +55,7 @@ When `Accept` header is set to anything other than `*/*` or `applcation/json`
     </html>
 
 
-## Contributors:
-
-    Ishan Jain([@ishanjain28](https://github.com/ishanjain28))
-    Mrinal Raj([@mrinalraj](http://github.com/mrinalraj))
+## Contributors
+	
+1. Ishan Jain([@ishanjain28](https://github.com/ishanjain28))
+2. Mrinal Raj([@mrinalraj](http://github.com/mrinalraj))
