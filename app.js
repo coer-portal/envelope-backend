@@ -100,7 +100,7 @@ app.post('/submit-post', (req, res, next) => {
 	db.save(postdata, posts).then(result => {
 		console.log(`Saved ${result.result.ok} post`);
 		res.send(JSON.stringify({
-			share_hash: postdata.shareHash,
+			share_hash: postdata.share_hash,
 			edit_hash: postdata.edit_hash,
 			time: postdata.time,
 		}));
@@ -141,7 +141,7 @@ function sendErrorResponse(req, res, err, code) {
 
 	res.status(code);
 
-	if (accepts.indexOf('*/*') != -1 || accepts.indexOf('/json') != -1) {
+	if (accepts.indexOf('*/*') != -1 || accepts.indexOf('application/json') != -1) {
 		res.write(JSON.stringify({
 			error: err.message,
 			code: code
