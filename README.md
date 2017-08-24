@@ -59,3 +59,4 @@ When `Accept` header is set to anything other than `*/*` or `applcation/json`
 	
 1. Ishan Jain([@ishanjain28](https://github.com/ishanjain28))
 2. Mrinal Raj([@mrinalraj](http://github.com/mrinalraj))
+3. Piyush Bhatt([@piyush01bhatt](https://github.com/Piyush01Bhatt))
