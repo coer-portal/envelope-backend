@@ -26,25 +26,42 @@ func Init() (*DB, error) {
 		return nil, err
 	}
 
-	log.Info.Printf("Creating Tables...\n")
-	_, err = db.Exec("CREATE TABLE reports(id SERIAL PRIMARY KEY, postid VARCHAR NOT NULL, deviceid VARCHAR NOT NULL, reason VARCHAR NOT NULL)")
-	if err != nil {
-		if perr, ok := err.(*pq.Error); ok {
+	pqdb := &DB{Db: db}
 
-			if perr.Code.Name() != "duplicate_table" {
-				return nil, perr
-			} else {
-				log.Warn.Printf("%s: %s", perr.Code.Name(), perr.Error())
-			}
-		} else {
-			return nil, err
-		}
+	log.Info.Println("Creating Tables")
+
+	log.Info.Println("Creating reports table")
+	err = pqdb.createTables("CREATE TABLE reports(id SERIAL PRIMARY KEY, postid VARCHAR NOT NULL, deviceid VARCHAR NOT NULL, reason VARCHAR NOT NULL)")
+	if err != nil {
+		return nil, err
 	}
+
+	log.Info.Println("Creating posts table")
+	err = pqdb.createTables("CREATE TABLE posts (postid VARCHAR PRIMARY KEY, deviceid VARCHAR NOT NULL, post VARCHAR NOT NULL, likes INTEGER NOT NULL, dislikes INTEGER NOT NULL, timestamp INTEGER NOT NULL, ipaddr CIDR NOT NULL)")
+	if err != nil {
+		return nil, err
+	}
+	log.Info.Println("Created posts table")
 
 	log.Info.Printf("Tables Created...")
 	return &DB{Db: db}, nil
 }
 
-func (d *DB) FetchNPosts() {}
+func (d *DB) FetchNPosts(n int) {}
 
-func (d *DB) FetchAfterID() {}
+func (d *DB) FetchAfterID(id string) {}
+
+func (d *DB) createTables(stmt string) error {
+	_, err := d.Db.Exec(stmt)
+	if err != nil {
+		if perr, ok := err.(*pq.Error); ok {
+			if perr.Code.Name() != "duplicate_table" {
+				return perr
+			}
+			log.Warn.Printf("%s: %s", perr.Code.Name(), perr.Error())
+			return nil
+		}
+		return err
+	}
+	return nil
+}
