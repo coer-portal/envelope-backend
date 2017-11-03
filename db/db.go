@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 
 	"github.com/ishanjain28/envelope-backend/log"
@@ -13,7 +14,10 @@ type DB struct {
 	Db *sql.DB
 }
 
-var postgresAddr = os.Getenv("POSTGRES_URL")
+var (
+	postgresAddr = os.Getenv("POSTGRES_URL")
+	ErrNotFound  = "not found"
+)
 
 func Init() (*DB, error) {
 
@@ -50,6 +54,32 @@ func Init() (*DB, error) {
 func (d *DB) FetchNPosts(n int) {}
 
 func (d *DB) FetchAfterID(id string) {}
+
+func (d *DB) Report(postid, deviceid, reason string) error {
+
+	_, err := d.Db.Exec(fmt.Sprintf("INSERT INTO reports(postid, deviceid, reason) VALUES ('%s', '%s', '%s')", postid, deviceid, reason))
+	if err != nil {
+		return err
+	}
+
+	log.Info.Printf("Saved report for %s from %s", postid, deviceid)
+
+	return nil
+}
+
+func (d *DB) FetchPost(postid string) (*Post, error) {
+
+	row := d.Db.QueryRow(fmt.Sprintf("SELECT * FROM posts WHERE postid='%s'", postid))
+
+	p := &Post{}
+
+	err := row.Scan(p)
+	if err != nil {
+		return nil, err
+	}
+
+	return p, nil
+}
 
 func (d *DB) createTables(stmt string) error {
 	_, err := d.Db.Exec(stmt)

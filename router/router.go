@@ -17,16 +17,21 @@ import (
 const letterBytes = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 var (
+
+	// ErrNotFound is sent when an expected resource in request is unavailable
 	ErrNotFound         = "NOTFOUND"
-	ErrNotExists        = "NOTEXISTS"
+	ErrNotRegistered    = "NOTREGISTERED"
 	ErrInternal         = "INTERNALERROR"
 	ErrOutOfValidRegion = "OUTOFREGION"
+	ErrMismatch         = "MISMATCH"
+	ErrParsing          = "PARSINGERROR"
 	workingRegion       = "Uttarakhand"
 )
 
 type RouterContext struct {
-	rclient *redis.Client
-	pqdb    *db.DB
+	rclient  *redis.Client
+	pqdb     *db.DB
+	deviceid string
 }
 
 type HTTPError struct {
@@ -88,35 +93,78 @@ func Init(client *redis.Client, pqdb *db.DB) *mux.Router {
 	r := mux.NewRouter()
 
 	r.Handle("/register-device", Handle(client, nil,
+		parseForm(),
+		parseDeviceID(),
 		RegisterDevice(),
 	)).Methods("POST")
 
 	r.Handle("/verify-device", Handle(client, nil,
+		parseDeviceID(),
 		VerifyDevice(),
 	)).Methods("GET")
+
+	r.Handle("/report", Handle(client, pqdb,
+		parseForm(),
+		parseDeviceID(),
+		report(),
+	)).Methods("POST")
+
 	return r
+}
+
+// parseForm parses the form in a request and handles the error appropriately
+func parseForm() Handler {
+	return func(rc *RouterContext, w http.ResponseWriter, r *http.Request) *HTTPError {
+		err := r.ParseForm()
+
+		if err != nil {
+			return &HTTPError{
+				IError:    err,
+				Level:     1,
+				Status:    http.StatusBadRequest,
+				Error:     "error in parsing form",
+				ErrorCode: ErrParsing,
+			}
+		}
+		return nil
+	}
+}
+
+// parseDeviceID parses "deviceid" from query parameters in a GET request and from Form value in a POST request
+func parseDeviceID() Handler {
+	return func(rc *RouterContext, w http.ResponseWriter, r *http.Request) *HTTPError {
+
+		var deviceid string
+
+		if r.Method == "POST" {
+			deviceid = r.Form.Get("deviceid")
+			if deviceid == "" {
+				return &HTTPError{
+					Level:     1,
+					Error:     "No Device Id",
+					ErrorCode: ErrNotFound,
+					Status:    http.StatusBadRequest,
+				}
+			}
+		} else {
+			deviceid = r.URL.Query().Get("deviceid")
+			if deviceid == "" {
+				return &HTTPError{
+					Level:     1,
+					Error:     "No Device Id",
+					ErrorCode: ErrNotFound,
+					Status:    http.StatusBadRequest}
+			}
+		}
+
+		rc.deviceid = deviceid
+		return nil
+	}
 }
 
 // RegisterDevice receives a deviceid via POST and puts it in redis for 2 months, And sends a Hash back in response
 func RegisterDevice() Handler {
 	return func(rc *RouterContext, w http.ResponseWriter, r *http.Request) *HTTPError {
-
-		err := r.ParseForm()
-		if err != nil {
-			return &HTTPError{
-				IError: err, Level: 1, Error: "error in parsing form", Status: http.StatusBadRequest}
-		}
-
-		deviceid := r.Form.Get("deviceid")
-		if deviceid == "" {
-			return &HTTPError{
-				IError:    errors.New("No Device Id"),
-				Level:     1,
-				Error:     "Nr Device Id",
-				ErrorCode: ErrNotFound,
-				Status:    http.StatusBadRequest,
-			}
-		}
 
 		region, err := common.GetRegionofIP(r.RemoteAddr)
 		if err != nil {
@@ -133,14 +181,15 @@ func RegisterDevice() Handler {
 				Error:     "Out of working region",
 				ErrorCode: ErrOutOfValidRegion,
 				IError:    errors.New(fmt.Sprintf("%s: %s is from %s", ErrOutOfValidRegion, r.RemoteAddr, region)),
-				Level:     1,
+				Level:     3,
 				Status:    http.StatusUnauthorized,
 			}
 		}
 
 		h := RandomString(32)
 
-		err = rc.rclient.Set(deviceid, h, 0).Err()
+		// TODO: Set correct expiry time here
+		err = rc.rclient.Set(rc.deviceid, h, 0).Err()
 		if err != nil {
 			return &HTTPError{
 				IError:    err,
@@ -151,44 +200,42 @@ func RegisterDevice() Handler {
 			}
 		}
 
-		resp := &RegisterDeviceResponse{
-			Hash: h,
+		resp := &OkResponse{
+			Status: http.StatusText(http.StatusOK),
 		}
+
 		err = json.NewEncoder(w).Encode(resp)
 		if err != nil {
-			return &HTTPError{
-				IError:    err,
-				Level:     3,
-				Error:     http.StatusText(http.StatusInternalServerError),
-				ErrorCode: ErrInternal,
-				Status:    http.StatusInternalServerError,
-			}
+			return handleJSONError(err)
 		}
 		return nil
 	}
 }
 
-// Location, Input -> Deviceid, Hash
+// VerifyDevice verifies an existing deviceid
+//
+// Input: Location, Device ID(deviceid), Hash(hash) in Query Parameters
+//
+// Output: Hash
 func VerifyDevice() Handler {
 	return func(rc *RouterContext, w http.ResponseWriter, r *http.Request) *HTTPError {
 
-		deviceid := r.URL.Query().Get("deviceid")
-		if deviceid == "" {
+		h := r.URL.Query().Get("hash")
+		if h == "" {
 			return &HTTPError{
-				IError:    errors.New("No device id"),
-				Level:     1,
 				ErrorCode: ErrNotFound,
-				Error:     "No Device id",
+				Level:     1,
 				Status:    http.StatusBadRequest,
+				Error:     "No Hash found",
 			}
 		}
-		res, err := rc.rclient.Get(deviceid).Result()
+
+		res, err := rc.rclient.Get(rc.deviceid).Result()
 		if err != nil {
 			if err == redis.Nil {
 				return &HTTPError{
-					IError:    errors.New("No Results Found"),
 					Status:    http.StatusOK,
-					ErrorCode: ErrNotExists,
+					ErrorCode: ErrNotRegistered,
 					Error:     "Device is not registered",
 					Level:     1,
 				}
@@ -202,20 +249,24 @@ func VerifyDevice() Handler {
 			}
 		}
 
-		resp := &RegisterDeviceResponse{
-			Hash: res,
-		}
-
-		err = json.NewEncoder(w).Encode(resp)
-		if err != nil {
+		if res != h {
 			return &HTTPError{
-				Error:     http.StatusText(http.StatusInternalServerError),
-				ErrorCode: ErrInternal,
-				IError:    err,
 				Level:     3,
-				Status:    http.StatusInternalServerError,
+				IError:    errors.New("hash mismatch"),
+				Error:     "Hashes do not match",
+				ErrorCode: ErrMismatch,
+				Status:    http.StatusOK,
 			}
 		}
+
+		resp := &OkResponse{
+			Status: http.StatusText(http.StatusOK),
+		}
+		err = json.NewEncoder(w).Encode(resp)
+		if err != nil {
+			return handleJSONError(err)
+		}
+
 		return nil
 	}
 }
@@ -241,10 +292,74 @@ func fetchComments() {}
 func submitComments() {}
 
 // postid, deviceid, reason
-func report() {}
+func report() Handler {
+	return func(rc *RouterContext, w http.ResponseWriter, r *http.Request) *HTTPError {
+
+		postid := r.Form.Get("postid")
+		if postid == "" {
+			return &HTTPError{
+				Level:     1,
+				Status:    http.StatusBadRequest,
+				Error:     "postid not found",
+				ErrorCode: ErrNotFound,
+			}
+		}
+
+		reason := r.Form.Get("reason")
+		if reason == "" {
+			return &HTTPError{
+				Level:     1,
+				Status:    http.StatusBadRequest,
+				Error:     "reason not found",
+				ErrorCode: ErrNotFound,
+			}
+		}
+
+		_, err := rc.pqdb.FetchPost(postid)
+		if err != nil {
+			return &HTTPError{
+				Level:     3,
+				Status:    http.StatusBadRequest,
+				Error:     "invalid postid",
+				ErrorCode: ErrNotFound,
+				IError:    err,
+			}
+		}
+
+		err = rc.pqdb.Report(postid, rc.deviceid, reason)
+		if err != nil {
+			return &HTTPError{
+				IError:    err,
+				ErrorCode: ErrInternal,
+				Status:    http.StatusInternalServerError,
+				Level:     3,
+				Error:     "Error in reporting this post, Please retry in some time",
+			}
+		}
+
+		resp := OkResponse{
+			Status: http.StatusText(http.StatusOK),
+		}
+
+		err = json.NewEncoder(w).Encode(resp)
+		if err != nil {
+			return handleJSONError(err)
+		}
+		return nil
+	}
+}
+
+func handleJSONError(err error) *HTTPError {
+	return &HTTPError{
+		Error:     http.StatusText(http.StatusInternalServerError),
+		ErrorCode: ErrInternal,
+		IError:    err,
+		Level:     3,
+		Status:    http.StatusInternalServerError,
+	}
+}
 
 // input: postid; output: post, timestamp, likes, comments
-
 func RandomString(n int) string {
 	b := make([]byte, n)
 	for i := range b {
