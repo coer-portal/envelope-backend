@@ -1,13 +1,11 @@
 package db
 
-import "net"
-
 type Post struct {
-	ID        string  `db:"postid"`
-	Text      string  `db:"post"`
-	Timestamp int64   `db:"timestamp"`
-	DeviceID  string  `db:"deviceid"`
-	Likes     int     `db:"likes"`
-	Dislikes  int     `db:"dislikes"`
-	IPAddr    *net.IP `db:"ipaddr"`
+	ID        int64  `db:"postid" json:"postid"`
+	Text      string `db:"post" json:"post"`
+	Timestamp int64  `db:"timestamp" json:"timestamp"`
+	DeviceID  string `db:"deviceid" json:"-"`
+	Comments  int    `db:"comments" json:"comments"`
+	Likes     int    `db:"likes" json:"likes"`
+	IPAddr    string `db:"ipAddr" json:"-"`
 }
