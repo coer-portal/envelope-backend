@@ -16,7 +16,9 @@ type DB struct {
 
 var (
 	postgresAddr = os.Getenv("POSTGRES_URL")
-	ErrNotFound  = "not found"
+
+	ErrInvalidPostID = "INVALID_POST_ID"
+	ErrAlreadyLiked  = "ALREADY_LIKED"
 )
 
 func Init() (*DB, error) {
@@ -35,23 +37,31 @@ func Init() (*DB, error) {
 	log.Info.Println("Creating Tables")
 
 	log.Info.Println("Creating reports table")
-	err = pqdb.createTables("CREATE TABLE reports(reportid SERIAL PRIMARY KEY, postid VARCHAR NOT NULL, deviceid VARCHAR NOT NULL, reason VARCHAR NOT NULL)")
+	err = pqdb.createTables("CREATE TABLE reports(reportid SERIAL PRIMARY KEY, postid INTEGER NOT NULL, deviceid VARCHAR NOT NULL, reason VARCHAR NOT NULL)")
 	if err != nil {
 		return nil, err
 	}
 
 	log.Info.Println("Creating posts table")
-	err = pqdb.createTables("CREATE TABLE posts (postid SERIAL PRIMARY KEY, deviceid VARCHAR NOT NULL, post VARCHAR NOT NULL, likes INTEGER NOT NULL, comments INTEGER NOT NULL, timestamp INTEGER NOT NULL, ipaddr VARCHAR NOT NULL)")
+	err = pqdb.createTables("CREATE TABLE posts (postid SERIAL PRIMARY KEY, deviceid VARCHAR NOT NULL, post VARCHAR NOT NULL, timestamp INTEGER NOT NULL, ipaddr VARCHAR NOT NULL)")
 	if err != nil {
 		return nil, err
 	}
 	log.Info.Println("Created posts table")
 
 	log.Info.Println("Creating Comments Table")
-
-	//	err := pqdb.createTables("CREATE TABLE comments(id SERIAL PRIMARY KEY, postid VARCHAR, deviceid VARCHAR NOT NULL,")
-
+	err = pqdb.createTables("CREATE TABLE comments(commentid SERIAL PRIMARY KEY, postid INTEGER NOT NULL, deviceid VARCHAR NOT NULL, timestamp INTEGER NOT NULL, comment VARCHAR NOT NULL)")
+	if err != nil {
+		return nil, err
+	}
 	log.Info.Println("Created Comments Table")
+
+	log.Info.Println("Creating Likes Table")
+	err = pqdb.createTables("CREATE TABLE likes(postid INTEGER NOT NULL, deviceid VARCHAR NOT NULL, PRIMARY KEY(postid, deviceid))")
+	if err != nil {
+		return nil, err
+	}
+	log.Info.Println("Created Likes Table")
 
 	log.Info.Printf("Tables Created...")
 	return &DB{Db: db}, nil
@@ -59,8 +69,8 @@ func Init() (*DB, error) {
 
 func (d *DB) SubmitPost(p *Post) error {
 
-	var id int64
-	query := fmt.Sprintf("INSERT INTO posts(deviceid, post, likes, comments, timestamp, ipaddr) VALUES ('%s', '%s', '%d', '%d', '%d', '%s') RETURNING postid", p.DeviceID, p.Text, p.Likes, p.Comments, p.Timestamp, p.IPAddr)
+	var id int
+	query := fmt.Sprintf("INSERT INTO posts(deviceid, post, timestamp, ipaddr) VALUES ('%s', '%s', '%d', '%s') RETURNING postid", p.DeviceID, p.Text, p.Timestamp, p.IPAddr)
 
 	err := d.Db.QueryRow(query).Scan(&id)
 	if err != nil {
@@ -74,7 +84,7 @@ func (d *DB) SubmitPost(p *Post) error {
 }
 
 func (d *DB) FetchNPosts(n int) ([]*Post, error) {
-	query := fmt.Sprintf("SELECT postid, deviceid, post, likes, comments, timestamp FROM posts ORDER BY timestamp DESC LIMIT %d", n)
+	query := fmt.Sprintf("SELECT postid, deviceid, post, timestamp FROM posts ORDER BY postid DESC LIMIT %d", n)
 
 	rows, err := d.Db.Query(query)
 	if err != nil {
@@ -86,7 +96,7 @@ func (d *DB) FetchNPosts(n int) ([]*Post, error) {
 	for rows.Next() {
 		post := &Post{}
 
-		err = rows.Scan(&post.ID, &post.DeviceID, &post.Text, &post.Likes, &post.Comments, &post.Timestamp)
+		err = rows.Scan(&post.ID, &post.DeviceID, &post.Text, &post.Timestamp)
 		if err != nil {
 			return nil, err
 		}
@@ -106,17 +116,24 @@ func (d *DB) FetchPostsFromID(id int, limit int, prop string) ([]*Post, error) {
 
 	err := row.Scan(&t)
 	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+
 		return nil, err
 	}
 
 	var query string
 	if prop == "after" {
-		query = fmt.Sprintf("SELECT postid, deviceid, post, likes, comments, timestamp FROM posts WHERE timestamp >= %d LIMIT %d", t, limit)
+		query = fmt.Sprintf("SELECT postid, deviceid, post, timestamp FROM posts WHERE timestamp >= %d LIMIT %d", t, limit)
 	} else {
-		query = fmt.Sprintf("SELECT postid, deviceid, post, likes, comments, timestamp FROM posts WHERE timestamp < %d ORDER BY timestamp DESC LIMIT %d", t, limit)
+		query = fmt.Sprintf("SELECT postid, deviceid, post, timestamp FROM posts WHERE timestamp < %d ORDER BY timestamp DESC LIMIT %d", t, limit)
 	}
 	rows, err := d.Db.Query(query)
 	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
 		return nil, err
 	}
 
@@ -125,8 +142,11 @@ func (d *DB) FetchPostsFromID(id int, limit int, prop string) ([]*Post, error) {
 	for rows.Next() {
 		post := &Post{}
 
-		err := rows.Scan(&post.ID, &post.DeviceID, &post.Text, &post.Likes, &post.Comments, &post.Timestamp)
+		err := rows.Scan(&post.ID, &post.DeviceID, &post.Text, &post.Timestamp)
 		if err != nil {
+			if err == sql.ErrNoRows {
+				return nil, nil
+			}
 			return nil, err
 		}
 		p = append(p, post)
@@ -135,11 +155,21 @@ func (d *DB) FetchPostsFromID(id int, limit int, prop string) ([]*Post, error) {
 	return p, nil
 }
 
+// Report puts information like postid and device id in reports table
 func (d *DB) Report(postid, deviceid, reason string) error {
+
+	postExistsQuery := fmt.Sprintf("SELECT postid FROM posts where postid='%s'", postid)
+
+	pid := 0
+
+	err := d.Db.QueryRow(postExistsQuery).Scan(&pid)
+	if err != nil {
+		return err
+	}
 
 	query := fmt.Sprintf("INSERT INTO reports(postid, deviceid, reason) VALUES ('%s', '%s', '%s')", postid, deviceid, reason)
 
-	_, err := d.Db.Exec(query)
+	_, err = d.Db.Exec(query)
 	if err != nil {
 		return err
 	}
@@ -159,6 +189,84 @@ func (d *DB) FetchPost(postid string) (*Post, error) {
 
 	err := row.Scan()
 	if err != nil {
+		return nil, err
+	}
+
+	return p, nil
+}
+
+func (d *DB) LikePost(postid string, deviceid string) error {
+
+	query := fmt.Sprintf("INSERT INTO likes(postid, deviceid) VALUES('%s', '%s')", postid, deviceid)
+
+	p, err := d.fetchPost(postid)
+	if err != nil {
+		return err
+	}
+
+	if p == nil {
+		return errors.New(ErrInvalidPostID)
+	}
+
+	_, err = d.Db.Exec(query)
+	if err != nil {
+		log.Warn.Println(err.(pq.Error).Code.Name())
+		return err
+	}
+
+	return nil
+}
+
+func (d *DB) fetchComments(postid string) ([]*Comment, error) {
+	query := fmt.Sprintf("SELECT commentid, comment, timestamp FROM comments WHERE postid='%s'", postid)
+
+	c := []*Comment{}
+
+	rows, err := d.Db.Query(query)
+	if err != nil {
+		return nil, err
+	}
+
+	for rows.Next() {
+		co := &Comment{}
+
+		err = rows.Scan(&co.ID, &co.Text, &co.Timestamp)
+
+		if err != nil {
+			return nil, err
+		}
+
+		c = append(c, co)
+	}
+
+	return c, nil
+}
+
+func (d *DB) fetchLikes(postid string) (int, error) {
+	query := fmt.Sprintf("SELECT count(*) FROM likes WHERE postid='%s'", postid)
+
+	likes := 0
+
+	err := d.Db.QueryRow(query).Scan(&likes)
+	if err != nil {
+		return 0, err
+	}
+
+	return likes, nil
+}
+
+func (d *DB) fetchPost(postid string) (*Post, error) {
+
+	query := fmt.Sprintf("SELECT postid, deviceid, post, timestamp, ipaddr FROM posts WHERE postid='%s'", postid)
+
+	p := &Post{}
+
+	err := d.Db.QueryRow(query).Scan(&p.ID, &p.DeviceID, &p.Text, &p.Timestamp, &p.IPAddr)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+
 		return nil, err
 	}
 

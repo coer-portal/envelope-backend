@@ -58,12 +58,13 @@ func handleJSONError(err error) *HTTPError {
 	}
 }
 
+// handleMissingDataError takes name of data that is missing or invalid and return *HTTPError
 func handleMissingDataError(v string) *HTTPError {
 	return &HTTPError{
 		Level:     1,
 		Status:    http.StatusBadRequest,
 		Error:     fmt.Sprintf("%s not found or invalid", v),
-		ErrorCode: ErrNotFound,
+		ErrorCode: ErrInvalidNotFound,
 	}
 }
 

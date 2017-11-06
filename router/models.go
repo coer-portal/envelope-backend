@@ -13,7 +13,7 @@ type RegisterDeviceResponse struct {
 
 type SubmitPostResponse struct {
 	Status    string `json:"status"`
-	PostID    int64  `json:"postid"`
+	PostID    int    `json:"postid"`
 	Timestamp int64  `json:"timestamp"`
 	likes     int    `json:"likes"`
 }

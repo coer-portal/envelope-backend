@@ -1,6 +1,7 @@
 package router
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,13 +20,13 @@ const letterBytes = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 var (
 
-	// ErrNotFound is sent when an expected resource in request is unavailable
-	ErrNotFound         = "NOTFOUND"
-	ErrNotRegistered    = "NOTREGISTERED"
-	ErrInternal         = "INTERNALERROR"
-	ErrOutOfValidRegion = "OUTOFREGION"
+	// ErrInvalidNotFound is sent when an expected resource in request is unavailable
+	ErrInvalidNotFound  = "INVALID_OR_NOT_FOUND"
+	ErrNotRegistered    = "NOT_REGISTERED"
+	ErrInternal         = "INTERNAL_ERROR"
+	ErrOutOfValidRegion = "OUT_OF_REGION"
 	ErrMismatch         = "MISMATCH"
-	ErrParsing          = "PARSINGERROR"
+	ErrParsing          = "PARSING_ERROR"
 	workingRegion       = "Uttarakhand"
 )
 
@@ -41,7 +42,7 @@ type HTTPError struct {
 	Status    int    `json:"status"`
 	Error     string `json:"error"`
 	ErrorCode string `json:"error_code"`
-	deviceid  string
+	deviceid  string `json:"-"`
 }
 
 type Handler func(rc *RouterContext, w http.ResponseWriter, r *http.Request) *HTTPError
@@ -130,6 +131,11 @@ func Init(client *redis.Client, pqdb *db.DB) *mux.Router {
 		fetchPost(),
 	)).Methods("GET")
 
+	r.Handle("/like-post", Handle(client, pqdb,
+		parseForm(),
+		parseDeviceID(),
+		likePost(),
+	)).Methods("POST")
 	return r
 }
 
@@ -146,7 +152,6 @@ func registerDevice() Handler {
 				Status:    http.StatusInternalServerError,
 			}
 		}
-
 		if region != workingRegion {
 			return &HTTPError{
 				Error:     "Out of working region",
@@ -230,7 +235,7 @@ func verifyDevice() Handler {
 		}
 
 		resp := &OkResponse{
-			Status: http.StatusText(http.StatusOK),
+			Status: OK,
 		}
 		err = json.NewEncoder(w).Encode(resp)
 		if err != nil {
@@ -322,8 +327,6 @@ func submitPost() Handler {
 
 		p := &db.Post{
 			DeviceID:  rc.deviceid,
-			Likes:     0,
-			Comments:  0,
 			Timestamp: timestamp,
 			Text:      post,
 			IPAddr:    fetchRemoteIpAddr(r.RemoteAddr),
@@ -363,7 +366,45 @@ func submitPost() Handler {
 func editPost() {}
 
 // input: postid, devicehash; output: Total likes
-func likePost() {}
+func likePost() Handler {
+	return func(rc *RouterContext, w http.ResponseWriter, r *http.Request) *HTTPError {
+
+		postid := r.Form.Get("postid")
+		if postid == "" {
+			return handleMissingDataError("postid")
+		}
+
+		err := rc.pqdb.LikePost(postid, rc.deviceid)
+		if err != nil {
+
+			if err.Error() == db.ErrInvalidPostID {
+
+				return &HTTPError{
+					Error:     "invalid postid",
+					ErrorCode: ErrInvalidNotFound,
+					Level:     1,
+					Status:    http.StatusBadRequest,
+				}
+			}
+
+			return &HTTPError{
+				Level:    3,
+				Status:   http.StatusInternalServerError,
+				IError:   err,
+				deviceid: rc.deviceid,
+			}
+		}
+
+		ok := &OkResponse{Status: OK}
+
+		err = json.NewEncoder(w).Encode(ok)
+		if err != nil {
+			return handleJSONError(err)
+		}
+
+		return nil
+	}
+}
 
 // input: Postid, output: Comments object array, Comment, Timestamp,
 func fetchComments() {}
@@ -384,20 +425,13 @@ func report() Handler {
 			return handleMissingDataError("reason")
 		}
 
-		_, err := rc.pqdb.FetchPost(postid)
+		err := rc.pqdb.Report(postid, rc.deviceid, reason)
 		if err != nil {
-			return &HTTPError{
-				Level:     3,
-				Status:    http.StatusBadRequest,
-				Error:     "invalid postid",
-				deviceid:  rc.deviceid,
-				ErrorCode: ErrNotFound,
-				IError:    err,
-			}
-		}
 
-		err = rc.pqdb.Report(postid, rc.deviceid, reason)
-		if err != nil {
+			if err == sql.ErrNoRows {
+				return handleMissingDataError("postid")
+			}
+
 			return &HTTPError{
 				IError:    err,
 				ErrorCode: ErrInternal,
@@ -409,7 +443,7 @@ func report() Handler {
 		}
 
 		resp := OkResponse{
-			Status: http.StatusText(http.StatusOK),
+			Status: OK,
 		}
 
 		err = json.NewEncoder(w).Encode(resp)
