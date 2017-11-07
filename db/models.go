@@ -10,6 +10,8 @@ type Post struct {
 }
 
 type PostMeta struct {
+	Likeable      bool       `json:"likeable"`
+	Editable      bool       `json:"editable"`
 	CommentsCount int        `db:"comments" json:"comments_count"`
 	LikesCount    int        `db:"likes" json:"likes_count"`
 	Comments      []*Comment `json:"comments"`

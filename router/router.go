@@ -1,65 +1,66 @@
 package router
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
-	"strconv"
-	"time"
-
-	"github.com/go-redis/redis"
 	"github.com/gorilla/mux"
 	"github.com/ishanjain28/envelope-backend/common"
 	"github.com/ishanjain28/envelope-backend/db"
 	"github.com/ishanjain28/envelope-backend/log"
+	"net/http"
+	"strconv"
+	"time"
 )
 
 const letterBytes = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 var (
-
-	// ErrInvalidNotFound is sent when an expected resource in request is unavailable
-	ErrInvalidNotFound  = "INVALID_OR_NOT_FOUND"
-	ErrNotRegistered    = "NOT_REGISTERED"
-	ErrInternal         = "INTERNAL_ERROR"
-	ErrOutOfValidRegion = "OUT_OF_REGION"
-	ErrMismatch         = "MISMATCH"
-	ErrParsing          = "PARSING_ERROR"
-	workingRegion       = "Uttarakhand"
+	workingRegion = "Uttarakhand"
 )
 
 type RouterContext struct {
-	rclient  *redis.Client
-	pqdb     *db.DB
+	db       *db.DB
 	deviceid string
+	ctx      context.Context
 }
 
 type HTTPError struct {
 	Level     int    `json:"-"`
 	IError    error  `json:"-"`
 	Status    int    `json:"status"`
-	Error     string `json:"error"`
 	ErrorCode string `json:"error_code"`
 	deviceid  string `json:"-"`
 }
 
+func (e HTTPError) Error() string {
+	return e.IError.Error()
+}
+
 type Handler func(rc *RouterContext, w http.ResponseWriter, r *http.Request) *HTTPError
 
-func Handle(client *redis.Client, pqdb *db.DB, handlers ...Handler) http.Handler {
+func Handle(pqre *db.DB, handlers ...Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+
+		// context for redis is set here and provided with first arguments in relevant functions
+		pqre.Redis = pqre.Redis.WithContext(ctx)
+
 		rc := &RouterContext{
-			rclient: client,
-			pqdb:    pqdb,
+			db:  pqre,
+			ctx: ctx,
 		}
+
 		w.Header().Add("Content-Type", "application/json")
 
 		for _, handler := range handlers {
 			e := handler(rc, w, r)
-			if e != nil {
 
+			if e != nil {
 				// 3 Levels of errors
 				// Level 1: Don't log anything on server, Only return a response to the user
 				// Level 2: Log the error as warning on the server, But don't send a response or close the request
@@ -76,21 +77,27 @@ func Handle(client *redis.Client, pqdb *db.DB, handlers ...Handler) http.Handler
 
 				case 2:
 					if e.deviceid != "" {
-						log.Warn.Printf("[%s] %v: %s\n", e.deviceid, e.IError, e.IError)
+						log.Warn.Printf("[%s] %s\n", e.deviceid, e.IError)
 					} else {
-						log.Warn.Printf("%v: %s\n", e.IError, e.IError)
+						log.Warn.Printf("%s\n", e.IError, e.IError)
 					}
 
 				case 3:
 					if e.deviceid != "" {
-						log.Error.Printf("[%s] %v: %s\n", e.deviceid, e.IError, e.IError)
+						log.Error.Printf("[%s] %s\n", e.deviceid, e.IError)
 					} else {
-						log.Warn.Printf("%v: %s\n", e.IError, e.IError)
+						log.Warn.Printf("%s\n", e.IError)
 					}
+
+					if e.IError == context.DeadlineExceeded {
+						e.Status = http.StatusRequestTimeout
+						e.ErrorCode = common.ErrTimeout
+					}
+
 					w.WriteHeader(e.Status)
 					err := json.NewEncoder(w).Encode(e)
 					if err != nil {
-						log.Error.Printf("%v: %s\n", err, err)
+						log.Error.Printf("%s\n", err, err)
 						w.Header().Set("Content-Type", "text/plain")
 						w.Write([]byte(http.StatusText(http.StatusInternalServerError)))
 					}
@@ -101,37 +108,39 @@ func Handle(client *redis.Client, pqdb *db.DB, handlers ...Handler) http.Handler
 	})
 }
 
-func Init(client *redis.Client, pqdb *db.DB) *mux.Router {
+func Init(pqre *db.DB) *mux.Router {
 	r := mux.NewRouter()
 
-	r.Handle("/register-device", Handle(client, nil,
+	r.Handle("/register-device", Handle(pqre,
 		parseForm(),
 		parseDeviceID(),
 		registerDevice(),
 	)).Methods("POST")
 
-	r.Handle("/verify-device", Handle(client, nil,
+	r.Handle("/verify-device", Handle(pqre,
 		parseDeviceID(),
 		verifyDevice(),
+		sendOKResponse(),
 	)).Methods("GET")
 
-	r.Handle("/report", Handle(client, pqdb,
+	r.Handle("/report", Handle(pqre,
 		parseForm(),
 		parseDeviceID(),
 		report(),
 	)).Methods("POST")
 
-	r.Handle("/submit-post", Handle(client, pqdb,
+	r.Handle("/submit-post", Handle(pqre,
 		parseForm(),
 		parseDeviceID(),
 		submitPost(),
 	)).Methods("POST")
 
-	r.Handle("/fetch/{tag}", Handle(client, pqdb,
+	r.Handle("/fetch/{tag}", Handle(pqre,
+		parseDeviceID(),
 		fetchPost(),
 	)).Methods("GET")
 
-	r.Handle("/like-post", Handle(client, pqdb,
+	r.Handle("/like-post", Handle(pqre,
 		parseForm(),
 		parseDeviceID(),
 		likePost(),
@@ -143,37 +152,38 @@ func Init(client *redis.Client, pqdb *db.DB) *mux.Router {
 func registerDevice() Handler {
 	return func(rc *RouterContext, w http.ResponseWriter, r *http.Request) *HTTPError {
 
+		// TODO: Add Context
 		region, err := common.GetRegionofIP(r.RemoteAddr)
 		if err != nil {
 			return &HTTPError{
-				ErrorCode: ErrInternal,
-				Error:     "error in registering device",
+				ErrorCode: common.ErrInternal,
 				Level:     3,
 				Status:    http.StatusInternalServerError,
+				IError:    err,
 			}
 		}
+
 		if region != workingRegion {
 			return &HTTPError{
-				Error:     "Out of working region",
-				ErrorCode: ErrOutOfValidRegion,
+				ErrorCode: common.ErrOutOfValidRegion,
 				deviceid:  rc.deviceid,
-				IError:    errors.New(fmt.Sprintf("%s: %s is from %s", ErrOutOfValidRegion, r.RemoteAddr, region)),
+				IError:    errors.New(fmt.Sprintf("%s: %s is from %s", common.ErrOutOfValidRegion, r.RemoteAddr, region)),
 				Level:     3,
 				Status:    http.StatusUnauthorized,
 			}
 		}
 
-		h := RandomString(32)
+		h := RandomString(20)
 
 		// TODO: Set correct expiry time here
-		err = rc.rclient.Set(rc.deviceid, h, 0).Err()
+
+		err = rc.db.RegisterDeviceID(rc.deviceid, h, 0)
 		if err != nil {
 			return &HTTPError{
 				IError:    err,
 				Level:     3,
 				deviceid:  rc.deviceid,
-				Error:     "error in registering device",
-				ErrorCode: ErrInternal,
+				ErrorCode: common.ErrInternal,
 				Status:    http.StatusInternalServerError,
 			}
 		}
@@ -183,10 +193,7 @@ func registerDevice() Handler {
 			Hash:   h,
 		}
 
-		err = json.NewEncoder(w).Encode(resp)
-		if err != nil {
-			return handleJSONError(err)
-		}
+		Send(resp, w)
 		return nil
 	}
 }
@@ -204,43 +211,34 @@ func verifyDevice() Handler {
 			return handleMissingDataError("hash")
 		}
 
-		res, err := rc.rclient.Get(rc.deviceid).Result()
+		err := rc.db.VerifyDeviceID(rc.deviceid, h)
 		if err != nil {
-			if err == redis.Nil {
+			if err.Error() == common.ErrInvalidData {
 				return &HTTPError{
+					ErrorCode: common.ErrExpired,
 					Status:    http.StatusOK,
-					ErrorCode: ErrNotRegistered,
-					Error:     "Device is not registered",
 					Level:     1,
 				}
 			}
+
 			return &HTTPError{
+				deviceid:  rc.deviceid,
+				ErrorCode: common.ErrInternal,
 				IError:    err,
 				Level:     3,
-				deviceid:  rc.deviceid,
-				ErrorCode: ErrInternal,
-				Error:     http.StatusText(http.StatusInternalServerError),
 				Status:    http.StatusInternalServerError,
 			}
 		}
+		return nil
+	}
+}
 
-		if res != h {
-			return &HTTPError{
-				Level:     3,
-				IError:    errors.New("hash mismatch"),
-				Error:     "Hashes do not match",
-				ErrorCode: ErrMismatch,
-				Status:    http.StatusOK,
-			}
-		}
+func sendOKResponse() Handler {
+	return func(rc *RouterContext, w http.ResponseWriter, r *http.Request) *HTTPError {
 
-		resp := &OkResponse{
-			Status: OK,
-		}
-		err = json.NewEncoder(w).Encode(resp)
-		if err != nil {
-			return handleJSONError(err)
-		}
+		ok := OkResponse{Status: OK}
+
+		Send(ok, w)
 
 		return nil
 	}
@@ -261,23 +259,18 @@ func fetchPost() Handler {
 
 		// Send Latest Posts
 		if tag == "latest" {
-			res, err := rc.pqdb.FetchNPosts(limit)
+			res, err := rc.db.FetchNPosts(rc.ctx, limit)
 			if err != nil {
 				return &HTTPError{
 					Level:     3,
 					deviceid:  rc.deviceid,
 					Status:    http.StatusInternalServerError,
-					Error:     "error in fetching latest posts",
-					ErrorCode: ErrInternal,
+					ErrorCode: common.ErrInternal,
 					IError:    err,
 				}
 			}
 
-			err = json.NewEncoder(w).Encode(res)
-			if err != nil {
-				return handleJSONError(err)
-			}
-
+			Send(res, w)
 			return nil
 		}
 
@@ -294,22 +287,19 @@ func fetchPost() Handler {
 		// Fetch Posts before specified id or after specified id
 		// Send posts that were created after the specified postid
 		// if the postid is invalid, Send a "Bad Request" Response
-		res, err := rc.pqdb.FetchPostsFromID(tagInt, limit, prop)
+		res, err := rc.db.FetchPostsFromID(rc.ctx, tagInt, limit, prop)
 		if err != nil {
 			return &HTTPError{
 				Level:     3,
 				deviceid:  rc.deviceid,
-				Error:     "error in fetching posts",
-				ErrorCode: ErrInternal,
+				ErrorCode: common.ErrInternal,
 				IError:    err,
 				Status:    http.StatusInternalServerError,
 			}
 		}
 
-		err = json.NewEncoder(w).Encode(res)
-		if err != nil {
-			return handleJSONError(err)
-		}
+		Send(res, w)
+
 		return nil
 	}
 }
@@ -332,16 +322,15 @@ func submitPost() Handler {
 			IPAddr:    fetchRemoteIpAddr(r.RemoteAddr),
 		}
 
-		err := rc.pqdb.SubmitPost(p)
+		err := rc.db.SubmitPost(rc.ctx, p)
 
 		if err != nil {
 			return &HTTPError{
 				Level:     3,
 				deviceid:  rc.deviceid,
 				IError:    err,
-				Error:     "error in saving Post, Please retry",
 				Status:    http.StatusInternalServerError,
-				ErrorCode: ErrInternal,
+				ErrorCode: common.ErrInternal,
 			}
 		}
 
@@ -353,11 +342,7 @@ func submitPost() Handler {
 			Timestamp: timestamp,
 		}
 
-		err = json.NewEncoder(w).Encode(resp)
-		if err != nil {
-			return handleJSONError(err)
-		}
-
+		Send(resp, w)
 		return nil
 	}
 }
@@ -374,14 +359,13 @@ func likePost() Handler {
 			return handleMissingDataError("postid")
 		}
 
-		err := rc.pqdb.LikePost(postid, rc.deviceid)
+		err := rc.db.LikePost(rc.ctx, postid, rc.deviceid)
 		if err != nil {
 
 			if err.Error() == db.ErrInvalidPostID {
 
 				return &HTTPError{
-					Error:     "invalid postid",
-					ErrorCode: ErrInvalidNotFound,
+					ErrorCode: common.ErrInvalidData,
 					Level:     1,
 					Status:    http.StatusBadRequest,
 				}
@@ -397,10 +381,7 @@ func likePost() Handler {
 
 		ok := &OkResponse{Status: OK}
 
-		err = json.NewEncoder(w).Encode(ok)
-		if err != nil {
-			return handleJSONError(err)
-		}
+		Send(ok, w)
 
 		return nil
 	}
@@ -425,7 +406,7 @@ func report() Handler {
 			return handleMissingDataError("reason")
 		}
 
-		err := rc.pqdb.Report(postid, rc.deviceid, reason)
+		err := rc.db.Report(rc.ctx, postid, rc.deviceid, reason)
 		if err != nil {
 
 			if err == sql.ErrNoRows {
@@ -434,11 +415,10 @@ func report() Handler {
 
 			return &HTTPError{
 				IError:    err,
-				ErrorCode: ErrInternal,
+				ErrorCode: common.ErrInternal,
 				deviceid:  rc.deviceid,
 				Status:    http.StatusInternalServerError,
 				Level:     3,
-				Error:     "Error in reporting this post, Please retry in some time",
 			}
 		}
 
@@ -446,10 +426,17 @@ func report() Handler {
 			Status: OK,
 		}
 
-		err = json.NewEncoder(w).Encode(resp)
-		if err != nil {
-			return handleJSONError(err)
-		}
+		Send(resp, w)
+
 		return nil
 	}
+}
+
+func Send(v interface{}, w http.ResponseWriter) *HTTPError {
+	err := json.NewEncoder(w).Encode(v)
+	if err != nil {
+		return handleJSONError(err)
+	}
+
+	return nil
 }

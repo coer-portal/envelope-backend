@@ -1,10 +1,11 @@
 package router
 
 import (
-	"fmt"
 	"math/rand"
 	"net/http"
 	"strings"
+
+	"github.com/ishanjain28/envelope-backend/common"
 )
 
 // parseForm parses the form in a request and handles the error appropriately
@@ -17,8 +18,7 @@ func parseForm() Handler {
 				IError:    err,
 				Level:     1,
 				Status:    http.StatusBadRequest,
-				Error:     "error in parsing form",
-				ErrorCode: ErrParsing,
+				ErrorCode: common.ErrParsing,
 			}
 		}
 		return nil
@@ -42,7 +42,6 @@ func parseDeviceID() Handler {
 				return handleMissingDataError("deviceid")
 			}
 		}
-
 		rc.deviceid = deviceid
 		return nil
 	}
@@ -50,8 +49,7 @@ func parseDeviceID() Handler {
 
 func handleJSONError(err error) *HTTPError {
 	return &HTTPError{
-		Error:     http.StatusText(http.StatusInternalServerError),
-		ErrorCode: ErrInternal,
+		ErrorCode: common.ErrInternal,
 		IError:    err,
 		Level:     3,
 		Status:    http.StatusInternalServerError,
@@ -63,8 +61,7 @@ func handleMissingDataError(v string) *HTTPError {
 	return &HTTPError{
 		Level:     1,
 		Status:    http.StatusBadRequest,
-		Error:     fmt.Sprintf("%s not found or invalid", v),
-		ErrorCode: ErrInvalidNotFound,
+		ErrorCode: common.ErrNotFound,
 	}
 }
 

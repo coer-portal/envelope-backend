@@ -1,21 +1,25 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
 	"os"
 
+	"github.com/go-redis/redis"
 	"github.com/ishanjain28/envelope-backend/log"
 	"github.com/lib/pq"
 )
 
 type DB struct {
-	Db *sql.DB
+	Pq    *sql.DB
+	Redis *redis.Client
 }
 
 var (
 	postgresAddr = os.Getenv("POSTGRES_URL")
+	redisAddr    = os.Getenv("REDIS_SERVER")
 
 	ErrInvalidPostID = "INVALID_POST_ID"
 	ErrAlreadyLiked  = "ALREADY_LIKED"
@@ -27,52 +31,45 @@ func Init() (*DB, error) {
 		return nil, errors.New("$POSTGRES_URL not set")
 	}
 
-	db, err := sql.Open("postgres", postgresAddr)
+	if redisAddr == "" {
+		return nil, errors.New("$REDIS_SERVER not set")
+	}
+
+	// Connect to Postgresql
+	pq, err := sql.Open("postgres", postgresAddr)
 	if err != nil {
 		return nil, err
 	}
 
-	pqdb := &DB{Db: db}
+	// Parse REDIS_SERVER and connect to Redis Server
+	redisOpt, err := redis.ParseURL(redisAddr)
+	if err != nil {
+		log.Error.Fatalf("Invalid $REDIS_SERVER: %v\n", err)
+	}
 
-	log.Info.Println("Creating Tables")
+	client := redis.NewClient(redisOpt)
 
-	log.Info.Println("Creating reports table")
-	err = pqdb.createTables("CREATE TABLE reports(reportid SERIAL PRIMARY KEY, postid INTEGER NOT NULL, deviceid VARCHAR NOT NULL, reason VARCHAR NOT NULL)")
+	err = client.Ping().Err()
+	if err != nil {
+		log.Error.Fatalf("Error in connecting to redis: %s", err)
+	}
+
+	db := &DB{Pq: pq, Redis: client}
+
+	err = db.createTables()
 	if err != nil {
 		return nil, err
 	}
 
-	log.Info.Println("Creating posts table")
-	err = pqdb.createTables("CREATE TABLE posts (postid SERIAL PRIMARY KEY, deviceid VARCHAR NOT NULL, post VARCHAR NOT NULL, timestamp INTEGER NOT NULL, ipaddr VARCHAR NOT NULL)")
-	if err != nil {
-		return nil, err
-	}
-	log.Info.Println("Created posts table")
-
-	log.Info.Println("Creating Comments Table")
-	err = pqdb.createTables("CREATE TABLE comments(commentid SERIAL PRIMARY KEY, postid INTEGER NOT NULL, deviceid VARCHAR NOT NULL, timestamp INTEGER NOT NULL, comment VARCHAR NOT NULL)")
-	if err != nil {
-		return nil, err
-	}
-	log.Info.Println("Created Comments Table")
-
-	log.Info.Println("Creating Likes Table")
-	err = pqdb.createTables("CREATE TABLE likes(postid INTEGER NOT NULL, deviceid VARCHAR NOT NULL, PRIMARY KEY(postid, deviceid))")
-	if err != nil {
-		return nil, err
-	}
-	log.Info.Println("Created Likes Table")
-
-	log.Info.Printf("Tables Created...")
-	return &DB{Db: db}, nil
+	return db, nil
 }
 
-func (d *DB) SubmitPost(p *Post) error {
+func (d *DB) SubmitPost(ctx context.Context, p *Post) error {
 
 	var id int
 	query := fmt.Sprintf("INSERT INTO posts(deviceid, post, timestamp, ipaddr) VALUES ('%s', '%s', '%d', '%s') RETURNING postid", p.DeviceID, p.Text, p.Timestamp, p.IPAddr)
 
-	err := d.Db.QueryRow(query).Scan(&id)
+	err := d.Pq.QueryRowContext(ctx, query).Scan(&id)
 	if err != nil {
 		return err
 	}
@@ -83,10 +80,10 @@ func (d *DB) SubmitPost(p *Post) error {
 	return nil
 }
 
-func (d *DB) FetchNPosts(n int) ([]*Post, error) {
+func (d *DB) FetchNPosts(ctx context.Context, n int) ([]*Post, error) {
 	query := fmt.Sprintf("SELECT postid, deviceid, post, timestamp FROM posts ORDER BY postid DESC LIMIT %d", n)
 
-	rows, err := d.Db.Query(query)
+	rows, err := d.Pq.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -107,11 +104,11 @@ func (d *DB) FetchNPosts(n int) ([]*Post, error) {
 }
 
 // FetchPostsFromID fetches a number of posts before or after the specified id
-func (d *DB) FetchPostsFromID(id int, limit int, prop string) ([]*Post, error) {
+func (d *DB) FetchPostsFromID(ctx context.Context, id int, limit int, prop string) ([]*Post, error) {
 
 	timestampquery := fmt.Sprintf("SELECT timestamp FROM posts WHERE postid='%d'", id)
 
-	row := d.Db.QueryRow(timestampquery)
+	row := d.Pq.QueryRowContext(ctx, timestampquery)
 	var t int64
 
 	err := row.Scan(&t)
@@ -129,7 +126,7 @@ func (d *DB) FetchPostsFromID(id int, limit int, prop string) ([]*Post, error) {
 	} else {
 		query = fmt.Sprintf("SELECT postid, deviceid, post, timestamp FROM posts WHERE timestamp < %d ORDER BY timestamp DESC LIMIT %d", t, limit)
 	}
-	rows, err := d.Db.Query(query)
+	rows, err := d.Pq.QueryContext(ctx, query)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -156,20 +153,20 @@ func (d *DB) FetchPostsFromID(id int, limit int, prop string) ([]*Post, error) {
 }
 
 // Report puts information like postid and device id in reports table
-func (d *DB) Report(postid, deviceid, reason string) error {
+func (d *DB) Report(ctx context.Context, postid, deviceid, reason string) error {
 
 	postExistsQuery := fmt.Sprintf("SELECT postid FROM posts where postid='%s'", postid)
 
 	pid := 0
 
-	err := d.Db.QueryRow(postExistsQuery).Scan(&pid)
+	err := d.Pq.QueryRowContext(ctx, postExistsQuery).Scan(&pid)
 	if err != nil {
 		return err
 	}
 
 	query := fmt.Sprintf("INSERT INTO reports(postid, deviceid, reason) VALUES ('%s', '%s', '%s')", postid, deviceid, reason)
 
-	_, err = d.Db.Exec(query)
+	_, err = d.Pq.ExecContext(ctx, query)
 	if err != nil {
 		return err
 	}
@@ -181,9 +178,9 @@ func (d *DB) Report(postid, deviceid, reason string) error {
 
 // FetchPost sends complete details of a post, Including all the comments on that post
 // TODO: incomplete
-func (d *DB) FetchPost(postid string) (*Post, error) {
+func (d *DB) FetchPost(ctx context.Context, postid string) (*Post, error) {
 
-	row := d.Db.QueryRow(fmt.Sprintf("SELECT  FROM posts WHERE postid='%s'", postid))
+	row := d.Pq.QueryRowContext(ctx, fmt.Sprintf("SELECT  FROM posts WHERE postid='%s'", postid))
 
 	p := &Post{}
 
@@ -195,11 +192,11 @@ func (d *DB) FetchPost(postid string) (*Post, error) {
 	return p, nil
 }
 
-func (d *DB) LikePost(postid string, deviceid string) error {
+func (d *DB) LikePost(ctx context.Context, postid string, deviceid string) error {
 
 	query := fmt.Sprintf("INSERT INTO likes(postid, deviceid) VALUES('%s', '%s')", postid, deviceid)
 
-	p, err := d.fetchPost(postid)
+	p, err := d.fetchPost(ctx, postid)
 	if err != nil {
 		return err
 	}
@@ -208,7 +205,7 @@ func (d *DB) LikePost(postid string, deviceid string) error {
 		return errors.New(ErrInvalidPostID)
 	}
 
-	_, err = d.Db.Exec(query)
+	_, err = d.Pq.ExecContext(ctx, query)
 	if err != nil {
 		log.Warn.Println(err.(pq.Error).Code.Name())
 		return err
@@ -217,12 +214,12 @@ func (d *DB) LikePost(postid string, deviceid string) error {
 	return nil
 }
 
-func (d *DB) fetchComments(postid string) ([]*Comment, error) {
+func (d *DB) fetchComments(ctx context.Context, postid string) ([]*Comment, error) {
 	query := fmt.Sprintf("SELECT commentid, comment, timestamp FROM comments WHERE postid='%s'", postid)
 
 	c := []*Comment{}
 
-	rows, err := d.Db.Query(query)
+	rows, err := d.Pq.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -242,12 +239,12 @@ func (d *DB) fetchComments(postid string) ([]*Comment, error) {
 	return c, nil
 }
 
-func (d *DB) fetchLikes(postid string) (int, error) {
+func (d *DB) fetchLikes(ctx context.Context, postid string) (int, error) {
 	query := fmt.Sprintf("SELECT count(*) FROM likes WHERE postid='%s'", postid)
 
 	likes := 0
 
-	err := d.Db.QueryRow(query).Scan(&likes)
+	err := d.Pq.QueryRowContext(ctx, query).Scan(&likes)
 	if err != nil {
 		return 0, err
 	}
@@ -255,13 +252,13 @@ func (d *DB) fetchLikes(postid string) (int, error) {
 	return likes, nil
 }
 
-func (d *DB) fetchPost(postid string) (*Post, error) {
+func (d *DB) fetchPost(ctx context.Context, postid string) (*Post, error) {
 
 	query := fmt.Sprintf("SELECT postid, deviceid, post, timestamp, ipaddr FROM posts WHERE postid='%s'", postid)
 
 	p := &Post{}
 
-	err := d.Db.QueryRow(query).Scan(&p.ID, &p.DeviceID, &p.Text, &p.Timestamp, &p.IPAddr)
+	err := d.Pq.QueryRowContext(ctx, query).Scan(&p.ID, &p.DeviceID, &p.Text, &p.Timestamp, &p.IPAddr)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -273,8 +270,44 @@ func (d *DB) fetchPost(postid string) (*Post, error) {
 	return p, nil
 }
 
-func (d *DB) createTables(stmt string) error {
-	_, err := d.Db.Exec(stmt)
+func (d *DB) createTables() error {
+
+	log.Info.Println("Creating Tables")
+
+	log.Info.Println("Creating reports table")
+	err := d.createTableHelper("CREATE TABLE reports(reportid SERIAL PRIMARY KEY, postid INTEGER NOT NULL, deviceid VARCHAR NOT NULL, reason VARCHAR NOT NULL)")
+	if err != nil {
+		return err
+	}
+
+	log.Info.Println("Creating posts table")
+	err = d.createTableHelper("CREATE TABLE posts (postid SERIAL PRIMARY KEY, deviceid VARCHAR NOT NULL, post VARCHAR NOT NULL, timestamp INTEGER NOT NULL, ipaddr VARCHAR NOT NULL)")
+	if err != nil {
+		return err
+	}
+	log.Info.Println("Created posts table")
+
+	log.Info.Println("Creating Comments Table")
+	err = d.createTableHelper("CREATE TABLE comments(commentid SERIAL PRIMARY KEY, postid INTEGER NOT NULL, deviceid VARCHAR NOT NULL, timestamp INTEGER NOT NULL, comment VARCHAR NOT NULL)")
+	if err != nil {
+		return err
+	}
+	log.Info.Println("Created Comments Table")
+
+	log.Info.Println("Creating Likes Table")
+	err = d.createTableHelper("CREATE TABLE likes(postid INTEGER NOT NULL, deviceid VARCHAR NOT NULL, PRIMARY KEY(postid, deviceid))")
+	if err != nil {
+		return err
+	}
+	log.Info.Println("Created Likes Table")
+
+	log.Info.Printf("Tables Created...")
+
+	return nil
+}
+
+func (d *DB) createTableHelper(stmt string) error {
+	_, err := d.Pq.Exec(stmt)
 	if err != nil {
 		if perr, ok := err.(*pq.Error); ok {
 			if perr.Code.Name() != "duplicate_table" {
