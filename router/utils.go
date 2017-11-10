@@ -4,8 +4,6 @@ import (
 	"math/rand"
 	"net/http"
 	"strings"
-
-	"github.com/ishanjain28/envelope-backend/common"
 )
 
 // parseForm parses the form in a request and handles the error appropriately
@@ -18,7 +16,7 @@ func parseForm() Handler {
 				IError:    err,
 				Level:     1,
 				Status:    http.StatusBadRequest,
-				ErrorCode: common.ErrParsing,
+				ErrorCode: ErrParsing,
 			}
 		}
 		return nil
@@ -49,7 +47,7 @@ func parseDeviceID() Handler {
 
 func handleJSONError(err error) *HTTPError {
 	return &HTTPError{
-		ErrorCode: common.ErrInternal,
+		ErrorCode: ErrInternal,
 		IError:    err,
 		Level:     3,
 		Status:    http.StatusInternalServerError,
@@ -61,7 +59,7 @@ func handleMissingDataError(v string) *HTTPError {
 	return &HTTPError{
 		Level:     1,
 		Status:    http.StatusBadRequest,
-		ErrorCode: common.ErrNotFound,
+		ErrorCode: ErrNotFound,
 	}
 }
 

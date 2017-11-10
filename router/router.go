@@ -6,13 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"strconv"
+	"time"
+
 	"github.com/gorilla/mux"
 	"github.com/ishanjain28/envelope-backend/common"
 	"github.com/ishanjain28/envelope-backend/db"
 	"github.com/ishanjain28/envelope-backend/log"
-	"net/http"
-	"strconv"
-	"time"
 )
 
 const letterBytes = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -22,7 +23,7 @@ var (
 )
 
 type RouterContext struct {
-	db       *db.DB
+	db       db.IDB
 	deviceid string
 	ctx      context.Context
 }
@@ -41,14 +42,14 @@ func (e HTTPError) Error() string {
 
 type Handler func(rc *RouterContext, w http.ResponseWriter, r *http.Request) *HTTPError
 
-func Handle(pqre *db.DB, handlers ...Handler) http.Handler {
+func Handle(pqre db.IDB, handlers ...Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 
 		// context for redis is set here and provided with first arguments in relevant functions
-		pqre.Redis = pqre.Redis.WithContext(ctx)
+		//pqre.Redis = pqre.Redis.WithContext(ctx)
 
 		rc := &RouterContext{
 			db:  pqre,
@@ -91,7 +92,7 @@ func Handle(pqre *db.DB, handlers ...Handler) http.Handler {
 
 					if e.IError == context.DeadlineExceeded {
 						e.Status = http.StatusRequestTimeout
-						e.ErrorCode = common.ErrTimeout
+						e.ErrorCode = ErrTimeout
 					}
 
 					w.WriteHeader(e.Status)
@@ -108,7 +109,7 @@ func Handle(pqre *db.DB, handlers ...Handler) http.Handler {
 	})
 }
 
-func Init(pqre *db.DB) *mux.Router {
+func Init(pqre db.IDB) *mux.Router {
 	r := mux.NewRouter()
 
 	r.Handle("/register-device", Handle(pqre,
@@ -156,7 +157,7 @@ func registerDevice() Handler {
 		region, err := common.GetRegionofIP(r.RemoteAddr)
 		if err != nil {
 			return &HTTPError{
-				ErrorCode: common.ErrInternal,
+				ErrorCode: ErrInternal,
 				Level:     3,
 				Status:    http.StatusInternalServerError,
 				IError:    err,
@@ -165,9 +166,9 @@ func registerDevice() Handler {
 
 		if region != workingRegion {
 			return &HTTPError{
-				ErrorCode: common.ErrOutOfValidRegion,
+				ErrorCode: ErrOutOfValidRegion,
 				deviceid:  rc.deviceid,
-				IError:    errors.New(fmt.Sprintf("%s: %s is from %s", common.ErrOutOfValidRegion, r.RemoteAddr, region)),
+				IError:    errors.New(fmt.Sprintf("%s: %s is from %s", ErrOutOfValidRegion, r.RemoteAddr, region)),
 				Level:     3,
 				Status:    http.StatusUnauthorized,
 			}
@@ -177,13 +178,13 @@ func registerDevice() Handler {
 
 		// TODO: Set correct expiry time here
 
-		err = rc.db.RegisterDeviceID(rc.deviceid, h, 0)
+		err = rc.db.RegisterDeviceID(rc.ctx, rc.deviceid, h, 0)
 		if err != nil {
 			return &HTTPError{
 				IError:    err,
 				Level:     3,
 				deviceid:  rc.deviceid,
-				ErrorCode: common.ErrInternal,
+				ErrorCode: ErrInternal,
 				Status:    http.StatusInternalServerError,
 			}
 		}
@@ -211,11 +212,11 @@ func verifyDevice() Handler {
 			return handleMissingDataError("hash")
 		}
 
-		err := rc.db.VerifyDeviceID(rc.deviceid, h)
+		err := rc.db.VerifyDeviceID(rc.ctx, rc.deviceid, h)
 		if err != nil {
-			if err.Error() == common.ErrInvalidData {
+			if err.Error() == ErrInvalidData {
 				return &HTTPError{
-					ErrorCode: common.ErrExpired,
+					ErrorCode: ErrExpired,
 					Status:    http.StatusOK,
 					Level:     1,
 				}
@@ -223,7 +224,7 @@ func verifyDevice() Handler {
 
 			return &HTTPError{
 				deviceid:  rc.deviceid,
-				ErrorCode: common.ErrInternal,
+				ErrorCode: ErrInternal,
 				IError:    err,
 				Level:     3,
 				Status:    http.StatusInternalServerError,
@@ -265,7 +266,7 @@ func fetchPost() Handler {
 					Level:     3,
 					deviceid:  rc.deviceid,
 					Status:    http.StatusInternalServerError,
-					ErrorCode: common.ErrInternal,
+					ErrorCode: ErrInternal,
 					IError:    err,
 				}
 			}
@@ -292,7 +293,7 @@ func fetchPost() Handler {
 			return &HTTPError{
 				Level:     3,
 				deviceid:  rc.deviceid,
-				ErrorCode: common.ErrInternal,
+				ErrorCode: ErrInternal,
 				IError:    err,
 				Status:    http.StatusInternalServerError,
 			}
@@ -330,7 +331,7 @@ func submitPost() Handler {
 				deviceid:  rc.deviceid,
 				IError:    err,
 				Status:    http.StatusInternalServerError,
-				ErrorCode: common.ErrInternal,
+				ErrorCode: ErrInternal,
 			}
 		}
 
@@ -365,7 +366,7 @@ func likePost() Handler {
 			if err.Error() == db.ErrInvalidPostID {
 
 				return &HTTPError{
-					ErrorCode: common.ErrInvalidData,
+					ErrorCode: ErrInvalidData,
 					Level:     1,
 					Status:    http.StatusBadRequest,
 				}
@@ -415,7 +416,7 @@ func report() Handler {
 
 			return &HTTPError{
 				IError:    err,
-				ErrorCode: common.ErrInternal,
+				ErrorCode: ErrInternal,
 				deviceid:  rc.deviceid,
 				Status:    http.StatusInternalServerError,
 				Level:     3,

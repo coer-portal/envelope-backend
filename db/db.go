@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/go-redis/redis"
 	"github.com/ishanjain28/envelope-backend/log"
@@ -17,6 +18,19 @@ type DB struct {
 	Redis *redis.Client
 }
 
+type IDB interface {
+	FetchNPosts(ctx context.Context, n int) ([]*Post, error)
+	FetchPost(ctx context.Context, postid string) (*Post, error)
+	FetchPostsFromID(ctx context.Context, id, limit int, prop string) ([]*Post, error)
+	LikePost(ctx context.Context, postid, deviceid string) error
+	Report(ctx context.Context, postid, deviceid, reason string) error
+	SubmitPost(ctx context.Context, p *Post) error
+
+	// Redis Related endpoints
+	VerifyDeviceID(ctx context.Context, deviceid, hash string) error
+	RegisterDeviceID(ctx context.Context, deviceid, hash string, t time.Duration) error
+}
+
 var (
 	postgresAddr = os.Getenv("POSTGRES_URL")
 	redisAddr    = os.Getenv("REDIS_SERVER")
@@ -25,7 +39,7 @@ var (
 	ErrAlreadyLiked  = "ALREADY_LIKED"
 )
 
-func Init() (*DB, error) {
+func Init() (IDB, error) {
 
 	if postgresAddr == "" {
 		return nil, errors.New("$POSTGRES_URL not set")
@@ -55,13 +69,11 @@ func Init() (*DB, error) {
 	}
 
 	db := &DB{Pq: pq, Redis: client}
-
 	err = db.createTables()
 	if err != nil {
 		return nil, err
 	}
-
-	return db, nil
+	return IDB(db), nil
 }
 
 func (d *DB) SubmitPost(ctx context.Context, p *Post) error {
