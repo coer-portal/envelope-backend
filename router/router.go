@@ -113,39 +113,61 @@ func Init(pqre db.IDB) *mux.Router {
 	r := mux.NewRouter()
 
 	r.Handle("/register-device", Handle(pqre,
-		parseForm(),
 		parseDeviceID(),
 		registerDevice(),
+		parseForm(),
 	)).Methods("POST")
 
 	r.Handle("/verify-device", Handle(pqre,
 		parseDeviceID(),
 		verifyDevice(),
-		sendOKResponse(),
 	)).Methods("GET")
 
 	r.Handle("/report", Handle(pqre,
-		parseForm(),
 		parseDeviceID(),
+		verifyDeviceID(),
+		parseForm(),
 		report(),
 	)).Methods("POST")
 
 	r.Handle("/submit-post", Handle(pqre,
-		parseForm(),
 		parseDeviceID(),
+		verifyDeviceID(),
+		parseForm(),
 		submitPost(),
+	)).Methods("POST")
+
+	r.Handle("/edit-post", Handle(pqre,
+		parseDeviceID(),
+		verifyDeviceID(),
+		parseForm(),
+		editPost(),
 	)).Methods("POST")
 
 	r.Handle("/fetch/{tag}", Handle(pqre,
 		parseDeviceID(),
+		verifyDeviceID(),
 		fetchPost(),
 	)).Methods("GET")
 
 	r.Handle("/like-post", Handle(pqre,
-		parseForm(),
 		parseDeviceID(),
+		verifyDeviceID(),
+		parseForm(),
 		likePost(),
 	)).Methods("POST")
+
+	r.Handle("/comment", Handle(pqre,
+		parseDeviceID(),
+		verifyDeviceID(),
+		parseForm(),
+	)).Methods("POST")
+
+	r.Handle("/fetch-comments", Handle(pqre,
+		parseDeviceID(),
+		verifyDeviceID(),
+	)).Methods("GET")
+
 	return r
 }
 
@@ -177,7 +199,6 @@ func registerDevice() Handler {
 		h := RandomString(20)
 
 		// TODO: Set correct expiry time here
-
 		err = rc.db.RegisterDeviceID(rc.ctx, rc.deviceid, h, 0)
 		if err != nil {
 			return &HTTPError{
@@ -189,12 +210,10 @@ func registerDevice() Handler {
 			}
 		}
 
-		resp := &RegisterDeviceResponse{
+		Send(&RegisterDeviceResponse{
 			Status: OK,
 			Hash:   h,
-		}
-
-		Send(resp, w)
+		}, w)
 		return nil
 	}
 }
@@ -212,11 +231,12 @@ func verifyDevice() Handler {
 			return handleMissingDataError("hash")
 		}
 
-		err := rc.db.VerifyDeviceID(rc.ctx, rc.deviceid, h)
+		hash, err := rc.db.VerifyDeviceID(rc.ctx, rc.deviceid)
 		if err != nil {
-			if err.Error() == ErrInvalidData {
+
+			if err.Error() == ErrNotRegistered {
 				return &HTTPError{
-					ErrorCode: ErrExpired,
+					ErrorCode: ErrNotRegistered,
 					Status:    http.StatusOK,
 					Level:     1,
 				}
@@ -230,16 +250,16 @@ func verifyDevice() Handler {
 				Status:    http.StatusInternalServerError,
 			}
 		}
-		return nil
-	}
-}
 
-func sendOKResponse() Handler {
-	return func(rc *RouterContext, w http.ResponseWriter, r *http.Request) *HTTPError {
+		if hash != h {
+			return &HTTPError{
+				ErrorCode: ErrExpired,
+				Status:    http.StatusOK,
+				Level:     1,
+			}
+		}
 
-		ok := OkResponse{Status: OK}
-
-		Send(ok, w)
+		Send(&OkResponse{Status: OK}, w)
 
 		return nil
 	}
@@ -258,9 +278,11 @@ func fetchPost() Handler {
 
 		tag := v["tag"]
 
+		posts := []*db.Post{}
+
 		// Send Latest Posts
 		if tag == "latest" {
-			res, err := rc.db.FetchNPosts(rc.ctx, limit)
+			posts, err = rc.db.FetchNPosts(rc.ctx, limit)
 			if err != nil {
 				return &HTTPError{
 					Level:     3,
@@ -270,36 +292,33 @@ func fetchPost() Handler {
 					IError:    err,
 				}
 			}
+		} else {
 
-			Send(res, w)
-			return nil
-		}
+			tagInt, err := strconv.Atoi(tag)
+			if err != nil {
+				return handleMissingDataError("postid")
+			}
 
-		tagInt, err := strconv.Atoi(tag)
-		if err != nil {
-			return handleMissingDataError("postid")
-		}
+			prop := r.URL.Query().Get("prop")
+			if prop == "" || (prop != "before" && prop != "after") {
+				return handleMissingDataError("prop")
+			}
 
-		prop := r.URL.Query().Get("prop")
-		if prop == "" || (prop != "before" && prop != "after") {
-			return handleMissingDataError("prop")
-		}
-
-		// Fetch Posts before specified id or after specified id
-		// Send posts that were created after the specified postid
-		// if the postid is invalid, Send a "Bad Request" Response
-		res, err := rc.db.FetchPostsFromID(rc.ctx, tagInt, limit, prop)
-		if err != nil {
-			return &HTTPError{
-				Level:     3,
-				deviceid:  rc.deviceid,
-				ErrorCode: ErrInternal,
-				IError:    err,
-				Status:    http.StatusInternalServerError,
+			// Fetch Posts before specified id or after specified id
+			// Send posts that were created after the specified postid
+			// if the postid is invalid, Send a "Bad Request" Response
+			posts, err = rc.db.FetchPostsFromID(rc.ctx, tagInt, limit, prop)
+			if err != nil {
+				return &HTTPError{
+					Level:     3,
+					deviceid:  rc.deviceid,
+					ErrorCode: ErrInternal,
+					IError:    err,
+					Status:    http.StatusInternalServerError,
+				}
 			}
 		}
-
-		Send(res, w)
+		Send(posts, w)
 
 		return nil
 	}
@@ -349,7 +368,25 @@ func submitPost() Handler {
 }
 
 // Verify DeviceID, -> input:newPost, timestamp; OK, timestamp
-func editPost() {}
+func editPost() Handler {
+	return func(rc *RouterContext, w http.ResponseWriter, r *http.Request) *HTTPError {
+
+		post := r.Form.Get("post")
+		if post == "" {
+			return handleMissingDataError("post")
+		}
+
+		postid := r.Form.Get("postid")
+		if postid == "" {
+			return handleMissingDataError("postid")
+		}
+
+		timestamp := time.Now().Unix()
+		p, err := rc.db.FetchPost(rc.ctx, postid)
+
+		return nil
+	}
+}
 
 // input: postid, devicehash; output: Total likes
 func likePost() Handler {

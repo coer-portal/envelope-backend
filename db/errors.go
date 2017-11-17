@@ -5,5 +5,5 @@ var (
 	ErrInvalidData = "INVALID_DATA"
 
 	// ErrNotRegistered is sent when a deviceid is not registered
-	ErrNotRegistered = "NOT_REGISTERED."
+	ErrNotRegistered = "NOT_REGISTERED"
 )

@@ -11,22 +11,18 @@ import (
 // Redis Client in DB has context set from Handle function in Router
 
 // VerifyDeviceID takes a Device ID and checks if it registered via checking it's existence in Redis.
-func (d *DB) VerifyDeviceID(ctx context.Context, deviceid string, hash string) error {
+func (d *DB) VerifyDeviceID(ctx context.Context, deviceid string) (string, error) {
 
 	h, err := d.Redis.Get(deviceid).Result()
 	if err != nil {
 
 		if err == redis.Nil {
-			return errors.New(ErrNotRegistered)
+			return "", errors.New(ErrNotRegistered)
 		}
-		return err
+		return "", err
 	}
 
-	if h != hash {
-		return errors.New(ErrInvalidData)
-	}
-
-	return nil
+	return h, nil
 }
 
 // RegisterDeviceID takes a device id and a hash and saves it in database

@@ -27,7 +27,7 @@ type IDB interface {
 	SubmitPost(ctx context.Context, p *Post) error
 
 	// Redis Related endpoints
-	VerifyDeviceID(ctx context.Context, deviceid, hash string) error
+	VerifyDeviceID(ctx context.Context, deviceid string) (string, error)
 	RegisterDeviceID(ctx context.Context, deviceid, hash string, t time.Duration) error
 }
 
@@ -134,9 +134,9 @@ func (d *DB) FetchPostsFromID(ctx context.Context, id int, limit int, prop strin
 
 	var query string
 	if prop == "after" {
-		query = fmt.Sprintf("SELECT postid, deviceid, post, timestamp FROM posts WHERE timestamp >= %d LIMIT %d", t, limit)
+		query = fmt.Sprintf("SELECT postid, deviceid, post, timestamp FROM posts WHERE timestamp >= %d AND postid >= %d LIMIT %d", t, id, limit)
 	} else {
-		query = fmt.Sprintf("SELECT postid, deviceid, post, timestamp FROM posts WHERE timestamp < %d ORDER BY timestamp DESC LIMIT %d", t, limit)
+		query = fmt.Sprintf("SELECT postid, deviceid, post, timestamp FROM posts WHERE timestamp < %d AND postid <= %d ORDER BY postid DESC LIMIT %d", t, id, limit)
 	}
 	rows, err := d.Pq.QueryContext(ctx, query)
 	if err != nil {
@@ -188,27 +188,11 @@ func (d *DB) Report(ctx context.Context, postid, deviceid, reason string) error 
 	return nil
 }
 
-// FetchPost sends complete details of a post, Including all the comments on that post
-// TODO: incomplete
-func (d *DB) FetchPost(ctx context.Context, postid string) (*Post, error) {
-
-	row := d.Pq.QueryRowContext(ctx, fmt.Sprintf("SELECT  FROM posts WHERE postid='%s'", postid))
-
-	p := &Post{}
-
-	err := row.Scan()
-	if err != nil {
-		return nil, err
-	}
-
-	return p, nil
-}
-
 func (d *DB) LikePost(ctx context.Context, postid string, deviceid string) error {
 
 	query := fmt.Sprintf("INSERT INTO likes(postid, deviceid) VALUES('%s', '%s')", postid, deviceid)
 
-	p, err := d.fetchPost(ctx, postid)
+	p, err := d.FetchPost(ctx, postid)
 	if err != nil {
 		return err
 	}
@@ -264,7 +248,7 @@ func (d *DB) fetchLikes(ctx context.Context, postid string) (int, error) {
 	return likes, nil
 }
 
-func (d *DB) fetchPost(ctx context.Context, postid string) (*Post, error) {
+func (d *DB) FetchPost(ctx context.Context, postid string) (*Post, error) {
 
 	query := fmt.Sprintf("SELECT postid, deviceid, post, timestamp, ipaddr FROM posts WHERE postid='%s'", postid)
 

@@ -27,20 +27,40 @@ func parseForm() Handler {
 func parseDeviceID() Handler {
 	return func(rc *RouterContext, w http.ResponseWriter, r *http.Request) *HTTPError {
 
-		var deviceid string
+		deviceid := r.Header.Get("deviceid")
+		if deviceid == "" {
+			return handleMissingDataError("deviceid")
+		}
 
-		if r.Method == "POST" {
-			deviceid = r.Form.Get("deviceid")
-			if deviceid == "" {
-				return handleMissingDataError("deviceid")
+		rc.deviceid = deviceid
+		return nil
+	}
+}
+
+// verifyDeviceID is a middleware that can be plugged in to make sure the specified endpoint is only accessible to registered users
+func verifyDeviceID() Handler {
+	return func(rc *RouterContext, w http.ResponseWriter, r *http.Request) *HTTPError {
+
+		_, err := rc.db.VerifyDeviceID(rc.ctx, rc.deviceid)
+
+		if err != nil {
+			if err.Error() == ErrNotRegistered {
+				return &HTTPError{
+					ErrorCode: ErrNotRegistered,
+					Status:    http.StatusUnauthorized,
+					Level:     1,
+				}
 			}
-		} else {
-			deviceid = r.URL.Query().Get("deviceid")
-			if deviceid == "" {
-				return handleMissingDataError("deviceid")
+
+			return &HTTPError{
+				deviceid:  rc.deviceid,
+				ErrorCode: ErrInternal,
+				IError:    err,
+				Level:     3,
+				Status:    http.StatusInternalServerError,
 			}
 		}
-		rc.deviceid = deviceid
+
 		return nil
 	}
 }
