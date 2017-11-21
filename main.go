@@ -11,7 +11,6 @@ import (
 )
 
 var port = os.Getenv("PORT")
-var redisAddr = os.Getenv("REDIS_SERVER")
 
 func main() {
 	log.Info.Printf("Starting Envelope Backend...\n")

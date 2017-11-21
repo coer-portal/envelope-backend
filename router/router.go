@@ -381,8 +381,8 @@ func editPost() Handler {
 			return handleMissingDataError("postid")
 		}
 
-		timestamp := time.Now().Unix()
-		p, err := rc.db.FetchPost(rc.ctx, postid)
+		//timestamp := time.Now().Unix()
+		//p, err := rc.db.FetchPost(rc.ctx, postid)
 
 		return nil
 	}

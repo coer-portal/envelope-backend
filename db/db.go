@@ -32,8 +32,8 @@ type IDB interface {
 }
 
 var (
-	postgresAddr = os.Getenv("POSTGRES_URL")
-	redisAddr    = os.Getenv("REDIS_SERVER")
+	postgresAddr = os.Getenv("DATABASE_URL")
+	redisAddr    = os.Getenv("REDISTOGO_URL")
 
 	ErrInvalidPostID = "INVALID_POST_ID"
 	ErrAlreadyLiked  = "ALREADY_LIKED"
