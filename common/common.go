@@ -27,3 +27,13 @@ func GetRegionofIP(ipaddr string) (string, error) {
 
 	return string(b), err
 }
+
+func GetIPAddr(r *http.Request) string {
+
+	headerIP := r.Header.Get("X-Forwarded-For")
+	if headerIP == "" {
+		return r.RemoteAddr
+	} else {
+		return headerIP
+	}
+}

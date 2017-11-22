@@ -176,7 +176,7 @@ func registerDevice() Handler {
 	return func(rc *RouterContext, w http.ResponseWriter, r *http.Request) *HTTPError {
 
 		// TODO: Add Context
-		region, err := common.GetRegionofIP(r.RemoteAddr)
+		region, err := common.GetRegionofIP(common.GetIPAddr(r))
 		if err != nil {
 			return &HTTPError{
 				ErrorCode: ErrInternal,
@@ -190,7 +190,7 @@ func registerDevice() Handler {
 			return &HTTPError{
 				ErrorCode: ErrOutOfValidRegion,
 				deviceid:  rc.deviceid,
-				IError:    errors.New(fmt.Sprintf("%s: %s is from %s", ErrOutOfValidRegion, r.RemoteAddr, region)),
+				IError:    errors.New(fmt.Sprintf("%s: %s is from %s", ErrOutOfValidRegion, common.GetIPAddr(r), region)),
 				Level:     3,
 				Status:    http.StatusUnauthorized,
 			}
@@ -339,7 +339,7 @@ func submitPost() Handler {
 			DeviceID:  rc.deviceid,
 			Timestamp: timestamp,
 			Text:      post,
-			IPAddr:    fetchRemoteIpAddr(r.RemoteAddr),
+			IPAddr:    fetchRemoteIpAddr(common.GetIPAddr(r)),
 		}
 
 		err := rc.db.SubmitPost(rc.ctx, p)
