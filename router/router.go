@@ -4,8 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -22,30 +20,44 @@ var (
 	workingRegion = "Uttarakhand"
 )
 
+// RouterContext holds all the connections/information a request will need
 type RouterContext struct {
 	db       db.IDB
 	deviceid string
 	ctx      context.Context
 }
 
+// HTTPError is returned by middlewares
+// This is used internally by the application
+// and some fields are serialized and sent as error response to the request.
 type HTTPError struct {
 	Level     int    `json:"-"`
 	IError    error  `json:"-"`
 	Status    int    `json:"status"`
 	ErrorCode string `json:"error_code"`
 	deviceid  string `json:"-"`
+	Message   string `json:"message"`
 }
 
 func (e HTTPError) Error() string {
 	return e.IError.Error()
 }
 
+// Handler interface provides for a easy, convenient middleware pattern
 type Handler func(rc *RouterContext, w http.ResponseWriter, r *http.Request) *HTTPError
 
+// Handle executes all the Handlers one by one.
+// Error from an handler is evaluated after it's execution and depending on the level of error
+// The decision to execute next middleware is taken.
+// Currently, There are 3 levels of errors.
+// Level 1,2 and 3. i
+// Level 1 errors are Bad requests, Or anything that is just the fault of user and there is no advantage in logging them
+// Level 2 errors are warnings, Something that might be important to the server. These errors are logged to console but the request is moved forward to next middleware.
+// Level 3, All hell broke loose, Log the request and send an appropriate error response to the user, Don't forward request to next middleware
 func Handle(pqre db.IDB, handlers ...Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
 		// context for redis is set here and provided with first arguments in relevant functions
@@ -62,10 +74,6 @@ func Handle(pqre db.IDB, handlers ...Handler) http.Handler {
 			e := handler(rc, w, r)
 
 			if e != nil {
-				// 3 Levels of errors
-				// Level 1: Don't log anything on server, Only return a response to the user
-				// Level 2: Log the error as warning on the server, But don't send a response or close the request
-				// Level 3: Log the request, Cancel the request from going any further and return an appropriate response
 				switch e.Level {
 				case 1:
 					w.WriteHeader(e.Status)
@@ -171,30 +179,31 @@ func Init(pqre db.IDB) *mux.Router {
 	return r
 }
 
-// RegisterDevice receives a deviceid via POST and puts it in redis for 2 months, And sends a Hash back in response
+// registerDevice receives a deviceid via POST and puts it in redis for 2 months, And sends a Hash back in response
 func registerDevice() Handler {
 	return func(rc *RouterContext, w http.ResponseWriter, r *http.Request) *HTTPError {
 
 		// TODO: Add Context
-		region, err := common.GetRegionofIP(common.GetIPAddr(r))
+		_, err := common.GetRegionofIP(common.GetIPAddr(r))
 		if err != nil {
 			return &HTTPError{
 				ErrorCode: ErrInternal,
 				Level:     3,
 				Status:    http.StatusInternalServerError,
 				IError:    err,
+				Message:   "error in getting region of your IP Address",
 			}
 		}
 
-		if region != workingRegion {
-			return &HTTPError{
-				ErrorCode: ErrOutOfValidRegion,
-				deviceid:  rc.deviceid,
-				IError:    errors.New(fmt.Sprintf("%s: %s is from %s", ErrOutOfValidRegion, common.GetIPAddr(r), region)),
-				Level:     3,
-				Status:    http.StatusUnauthorized,
-			}
-		}
+		//		if region != workingRegion {
+		//			return &HTTPError{
+		//				ErrorCode: ErrOutOfValidRegion,
+		//				deviceid:  rc.deviceid,
+		//				IError:    errors.New(fmt.Sprintf("%s: %s is from %s", ErrOutOfValidRegion, common.GetIPAddr(r), region)),
+		//				Level:     3,
+		//				Status:    http.StatusUnauthorized,
+		//			}
+		//		}
 
 		h := RandomString(20)
 
@@ -207,6 +216,7 @@ func registerDevice() Handler {
 				deviceid:  rc.deviceid,
 				ErrorCode: ErrInternal,
 				Status:    http.StatusInternalServerError,
+				Message:   "error in storing deviceid in database",
 			}
 		}
 

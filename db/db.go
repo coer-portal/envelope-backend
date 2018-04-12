@@ -18,15 +18,17 @@ type DB struct {
 	Redis *redis.Client
 }
 
+// IDB interface defines all the database operations used by the application.
 type IDB interface {
 	FetchNPosts(ctx context.Context, n int) ([]*Post, error)
-	FetchPost(ctx context.Context, postid string) (*Post, error)
 	FetchPostsFromID(ctx context.Context, id, limit int, prop string) ([]*Post, error)
 	LikePost(ctx context.Context, postid, deviceid string) error
 	Report(ctx context.Context, postid, deviceid, reason string) error
 	SubmitPost(ctx context.Context, p *Post) error
+	//Comment(ctx context.Context, postid string, comment *Comment) error
+	//FetchPostComments(ctx context.Context, postid string) ([]*Comment, error)
 
-	// Redis Related endpoints
+	// Authentication related endpoints
 	VerifyDeviceID(ctx context.Context, deviceid string) (string, error)
 	RegisterDeviceID(ctx context.Context, deviceid, hash string, t time.Duration) error
 }
@@ -69,6 +71,8 @@ func Init() (IDB, error) {
 	}
 
 	db := &DB{Pq: pq, Redis: client}
+
+	// Initialize tables befor returning
 	err = db.createTables()
 	if err != nil {
 		return nil, err
@@ -76,6 +80,7 @@ func Init() (IDB, error) {
 	return IDB(db), nil
 }
 
+// SubmitPost takes a Post, puts it into the database and returns the postid
 func (d *DB) SubmitPost(ctx context.Context, p *Post) error {
 
 	var id int
@@ -86,12 +91,14 @@ func (d *DB) SubmitPost(ctx context.Context, p *Post) error {
 		return err
 	}
 
-	log.Info.Printf("Saved 1 post(%d) from %s\n", id, p.DeviceID)
+	log.Info.Printf("saved 1 post(%d) from %s\n", id, p.DeviceID)
 
+	//TODO: Consider returning postid instead of mutating Post
 	p.ID = id
 	return nil
 }
 
+// FetchNPosts takes an integer and returns the most recent N posts
 func (d *DB) FetchNPosts(ctx context.Context, n int) ([]*Post, error) {
 	query := fmt.Sprintf("SELECT postid, deviceid, post, timestamp FROM posts ORDER BY postid DESC LIMIT %d", n)
 
@@ -116,7 +123,7 @@ func (d *DB) FetchNPosts(ctx context.Context, n int) ([]*Post, error) {
 }
 
 // FetchPostsFromID fetches a number of posts before or after the specified id
-func (d *DB) FetchPostsFromID(ctx context.Context, id int, limit int, prop string) ([]*Post, error) {
+func (d *DB) FetchPostsFromID(ctx context.Context, id, limit int, prop string) ([]*Post, error) {
 
 	timestampquery := fmt.Sprintf("SELECT timestamp FROM posts WHERE postid='%d'", id)
 
@@ -134,8 +141,10 @@ func (d *DB) FetchPostsFromID(ctx context.Context, id int, limit int, prop strin
 
 	var query string
 	if prop == "after" {
+		// Select N posts newer than the specified post and include the specified post.
 		query = fmt.Sprintf("SELECT postid, deviceid, post, timestamp FROM posts WHERE timestamp >= %d AND postid >= %d LIMIT %d", t, id, limit)
 	} else {
+		// Select N posts older than the specified post and exclude the specified post.
 		query = fmt.Sprintf("SELECT postid, deviceid, post, timestamp FROM posts WHERE timestamp < %d AND postid <= %d ORDER BY postid DESC LIMIT %d", t, id, limit)
 	}
 	rows, err := d.Pq.QueryContext(ctx, query)
@@ -170,7 +179,7 @@ func (d *DB) Report(ctx context.Context, postid, deviceid, reason string) error 
 	postExistsQuery := fmt.Sprintf("SELECT postid FROM posts where postid='%s'", postid)
 
 	pid := 0
-
+	// Verify that the specified postid exists
 	err := d.Pq.QueryRowContext(ctx, postExistsQuery).Scan(&pid)
 	if err != nil {
 		return err
@@ -188,6 +197,8 @@ func (d *DB) Report(ctx context.Context, postid, deviceid, reason string) error 
 	return nil
 }
 
+// LikePost adds a new entry in likes table containing details like deviceid and postid.
+// When complete details of a post are requested, We'll have to count all the entries containing specified postid.
 func (d *DB) LikePost(ctx context.Context, postid string, deviceid string) error {
 
 	query := fmt.Sprintf("INSERT INTO likes(postid, deviceid) VALUES('%s', '%s')", postid, deviceid)

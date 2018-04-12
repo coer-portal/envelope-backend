@@ -80,6 +80,7 @@ func handleMissingDataError(v string) *HTTPError {
 		Level:     1,
 		Status:    http.StatusBadRequest,
 		ErrorCode: ErrNotFound,
+		Message:   v + " not found",
 	}
 }
 
