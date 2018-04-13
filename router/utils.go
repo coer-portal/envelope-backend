@@ -13,10 +13,10 @@ func parseForm() Handler {
 
 		if err != nil {
 			return &HTTPError{
-				IError:    err,
-				Level:     1,
-				Status:    http.StatusBadRequest,
-				ErrorCode: ErrParsing,
+				IError:          err,
+				Level:           1,
+				GenericResponse: HTTPResponse(http.StatusBadRequest),
+				ErrorCode:       ErrParsing,
 			}
 		}
 		return nil
@@ -46,18 +46,18 @@ func verifyDeviceID() Handler {
 		if err != nil {
 			if err.Error() == ErrNotRegistered {
 				return &HTTPError{
-					ErrorCode: ErrNotRegistered,
-					Status:    http.StatusUnauthorized,
-					Level:     1,
+					ErrorCode:       ErrNotRegistered,
+					GenericResponse: HTTPResponse(http.StatusUnauthorized),
+					Level:           1,
 				}
 			}
 
 			return &HTTPError{
-				deviceid:  rc.deviceid,
-				ErrorCode: ErrInternal,
-				IError:    err,
-				Level:     3,
-				Status:    http.StatusInternalServerError,
+				deviceid:        rc.deviceid,
+				ErrorCode:       ErrInternal,
+				IError:          err,
+				Level:           3,
+				GenericResponse: HTTPResponse(http.StatusInternalServerError),
 			}
 		}
 
@@ -67,20 +67,19 @@ func verifyDeviceID() Handler {
 
 func handleJSONError(err error) *HTTPError {
 	return &HTTPError{
-		ErrorCode: ErrInternal,
-		IError:    err,
-		Level:     3,
-		Status:    http.StatusInternalServerError,
+		ErrorCode:       ErrInternal,
+		IError:          err,
+		Level:           3,
+		GenericResponse: HTTPResponse(http.StatusInternalServerError),
 	}
 }
 
 // handleMissingDataError takes name of data that is missing or invalid and return *HTTPError
 func handleMissingDataError(v string) *HTTPError {
 	return &HTTPError{
-		Level:     1,
-		Status:    http.StatusBadRequest,
-		ErrorCode: ErrNotFound,
-		Message:   v + " not found",
+		Level:           1,
+		ErrorCode:       ErrNotFound,
+		GenericResponse: HTTPResponse(http.StatusBadRequest),
 	}
 }
 

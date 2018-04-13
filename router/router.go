@@ -27,22 +27,6 @@ type RouterContext struct {
 	ctx      context.Context
 }
 
-// HTTPError is returned by middlewares
-// This is used internally by the application
-// and some fields are serialized and sent as error response to the request.
-type HTTPError struct {
-	Level     int    `json:"-"`
-	IError    error  `json:"-"`
-	Status    int    `json:"status"`
-	ErrorCode string `json:"error_code"`
-	deviceid  string `json:"-"`
-	Message   string `json:"message"`
-}
-
-func (e HTTPError) Error() string {
-	return e.IError.Error()
-}
-
 // Handler interface provides for a easy, convenient middleware pattern
 type Handler func(rc *RouterContext, w http.ResponseWriter, r *http.Request) *HTTPError
 
@@ -76,7 +60,7 @@ func Handle(pqre db.IDB, handlers ...Handler) http.Handler {
 			if e != nil {
 				switch e.Level {
 				case 1:
-					w.WriteHeader(e.Status)
+					w.WriteHeader(e.Code)
 					err := json.NewEncoder(w).Encode(e)
 					if err != nil {
 						w.Header().Set("Content-Type", "text/plain")
@@ -88,22 +72,22 @@ func Handle(pqre db.IDB, handlers ...Handler) http.Handler {
 					if e.deviceid != "" {
 						log.Warn.Printf("[%s] %s\n", e.deviceid, e.IError)
 					} else {
-						log.Warn.Printf("%s\n", e.IError, e.IError)
+						log.Warn.Println(e.IError)
 					}
 
 				case 3:
 					if e.deviceid != "" {
 						log.Error.Printf("[%s] %s\n", e.deviceid, e.IError)
 					} else {
-						log.Warn.Printf("%s\n", e.IError)
+						log.Warn.Println(e.IError)
 					}
 
 					if e.IError == context.DeadlineExceeded {
-						e.Status = http.StatusRequestTimeout
+						e.Code = http.StatusRequestTimeout
 						e.ErrorCode = ErrTimeout
 					}
 
-					w.WriteHeader(e.Status)
+					w.WriteHeader(e.Code)
 					err := json.NewEncoder(w).Encode(e)
 					if err != nil {
 						log.Error.Printf("%s\n", err, err)
@@ -120,12 +104,55 @@ func Handle(pqre db.IDB, handlers ...Handler) http.Handler {
 func Init(pqre db.IDB) *mux.Router {
 	r := mux.NewRouter()
 
+	/**
+	 * @api {post} /register-device Register a Device
+	 * @apiName RegisterDevice
+	 * @apiGroup Device
+	 *
+	 * @apiHeader {String} deviceid Unique Device ID
+	 *
+	 *
+	 * @apiSuccessExample {json} Success-Example:
+	 *		HTTP/1.1 200 Ok
+	 * 		{"hash":"XVlBzgbaiCMRAjWwhTHc","status":"OK","status_code":200}
+	 *
+	 * @apiErrorExample {json} Error-Example:
+	 *		HTTP/1.1 400 Bad Request
+	 * 		{"error_code":"NOT_FOUND","status":"Bad Request","status_code":400}
+	 *
+	 *		HTTP/1.1 500 Internal Server Error
+	 *		{"error_code":"INTERNAL_ERROR","status":"Internal Server Error","status_code:"500"}
+	 *
+	 *		HTTP/1.1 401 Unauthorized
+	 *		{"error_code":"OUT_OF_REGION","status":"Unauthorized","status_code:"401"}
+	 */
 	r.Handle("/register-device", Handle(pqre,
 		parseDeviceID(),
 		registerDevice(),
-		parseForm(),
 	)).Methods("POST")
 
+	/**
+	 * @api {get} /verify-device Verify a Device
+	 * @apiName VerifyDevice
+	 * @apiGroup Device
+	 *
+	 * @apiHeader {String} deviceid Unique Device ID
+	 *
+	 *
+	 * @apiSuccessExample {json} Success-Example:
+	 *		HTTP/1.1 200 Ok
+	 * 		{"status":"OK","status_code":200}
+	 *
+	 * @apiErrorExample {json} Error-Example:
+	 *		HTTP/1.1 400 Bad Request
+	 * 		{"error_code":"EXPIRED","status":"Bad Request","status_code":400}
+	 *
+	 *		HTTP/1.1 500 Internal Server Error
+	 *		{"error_code":"INTERNAL_ERROR","status":"Internal Server Error","status_code:"500"}
+	 *
+	 *		HTTP/1.1 401 Unauthorized
+	 *		{"error_code":"NOT_REGISTERED","status":"Unauthorized","status_code:"401"}
+	 */
 	r.Handle("/verify-device", Handle(pqre,
 		parseDeviceID(),
 		verifyDevice(),
@@ -187,11 +214,10 @@ func registerDevice() Handler {
 		_, err := common.GetRegionofIP(common.GetIPAddr(r))
 		if err != nil {
 			return &HTTPError{
-				ErrorCode: ErrInternal,
-				Level:     3,
-				Status:    http.StatusInternalServerError,
-				IError:    err,
-				Message:   "error in getting region of your IP Address",
+				ErrorCode:       ErrInternal,
+				Level:           3,
+				GenericResponse: HTTPResponse(http.StatusInternalServerError),
+				IError:          err,
 			}
 		}
 
@@ -211,18 +237,17 @@ func registerDevice() Handler {
 		err = rc.db.RegisterDeviceID(rc.ctx, rc.deviceid, h, 0)
 		if err != nil {
 			return &HTTPError{
-				IError:    err,
-				Level:     3,
-				deviceid:  rc.deviceid,
-				ErrorCode: ErrInternal,
-				Status:    http.StatusInternalServerError,
-				Message:   "error in storing deviceid in database",
+				IError:          err,
+				Level:           3,
+				deviceid:        rc.deviceid,
+				ErrorCode:       ErrInternal,
+				GenericResponse: HTTPResponse(http.StatusInternalServerError),
 			}
 		}
 
-		Send(&RegisterDeviceResponse{
-			Status: OK,
-			Hash:   h,
+		Send(RegisterDeviceResponse{
+			Hash:            h,
+			GenericResponse: HTTPResponse(http.StatusOK),
 		}, w)
 		return nil
 	}
@@ -236,7 +261,7 @@ func registerDevice() Handler {
 func verifyDevice() Handler {
 	return func(rc *RouterContext, w http.ResponseWriter, r *http.Request) *HTTPError {
 
-		h := r.URL.Query().Get("hash")
+		h := r.Header.Get("hash")
 		if h == "" {
 			return handleMissingDataError("hash")
 		}
@@ -246,30 +271,30 @@ func verifyDevice() Handler {
 
 			if err.Error() == ErrNotRegistered {
 				return &HTTPError{
-					ErrorCode: ErrNotRegistered,
-					Status:    http.StatusOK,
-					Level:     1,
+					ErrorCode:       ErrNotRegistered,
+					GenericResponse: HTTPResponse(http.StatusUnauthorized),
+					Level:           1,
 				}
 			}
 
 			return &HTTPError{
-				deviceid:  rc.deviceid,
-				ErrorCode: ErrInternal,
-				IError:    err,
-				Level:     3,
-				Status:    http.StatusInternalServerError,
+				deviceid:        rc.deviceid,
+				ErrorCode:       ErrInternal,
+				IError:          err,
+				Level:           3,
+				GenericResponse: HTTPResponse(http.StatusInternalServerError),
 			}
 		}
 
 		if hash != h {
 			return &HTTPError{
-				ErrorCode: ErrExpired,
-				Status:    http.StatusOK,
-				Level:     1,
+				ErrorCode:       ErrExpired,
+				GenericResponse: HTTPResponse(http.StatusBadRequest),
+				Level:           1,
 			}
 		}
 
-		Send(&OkResponse{Status: OK}, w)
+		Send(HTTPResponse(http.StatusOK), w)
 
 		return nil
 	}
@@ -295,11 +320,11 @@ func fetchPost() Handler {
 			posts, err = rc.db.FetchNPosts(rc.ctx, limit)
 			if err != nil {
 				return &HTTPError{
-					Level:     3,
-					deviceid:  rc.deviceid,
-					Status:    http.StatusInternalServerError,
-					ErrorCode: ErrInternal,
-					IError:    err,
+					Level:           3,
+					deviceid:        rc.deviceid,
+					GenericResponse: HTTPResponse(http.StatusInternalServerError),
+					ErrorCode:       ErrInternal,
+					IError:          err,
 				}
 			}
 		} else {
@@ -320,11 +345,11 @@ func fetchPost() Handler {
 			posts, err = rc.db.FetchPostsFromID(rc.ctx, tagInt, limit, prop)
 			if err != nil {
 				return &HTTPError{
-					Level:     3,
-					deviceid:  rc.deviceid,
-					ErrorCode: ErrInternal,
-					IError:    err,
-					Status:    http.StatusInternalServerError,
+					Level:           3,
+					deviceid:        rc.deviceid,
+					ErrorCode:       ErrInternal,
+					IError:          err,
+					GenericResponse: HTTPResponse(http.StatusInternalServerError),
 				}
 			}
 		}
@@ -356,20 +381,20 @@ func submitPost() Handler {
 
 		if err != nil {
 			return &HTTPError{
-				Level:     3,
-				deviceid:  rc.deviceid,
-				IError:    err,
-				Status:    http.StatusInternalServerError,
-				ErrorCode: ErrInternal,
+				Level:           3,
+				deviceid:        rc.deviceid,
+				IError:          err,
+				GenericResponse: HTTPResponse(http.StatusInternalServerError),
+				ErrorCode:       ErrInternal,
 			}
 		}
 
 		// p.ID is set in SubmitPost after retrieving ID of post inserted in database
 		resp := &SubmitPostResponse{
-			likes:     0,
-			PostID:    p.ID,
-			Status:    OK,
-			Timestamp: timestamp,
+			likes:           0,
+			PostID:          p.ID,
+			Timestamp:       timestamp,
+			GenericResponse: HTTPResponse(http.StatusOK),
 		}
 
 		Send(resp, w)
@@ -413,23 +438,21 @@ func likePost() Handler {
 			if err.Error() == db.ErrInvalidPostID {
 
 				return &HTTPError{
-					ErrorCode: ErrInvalidData,
-					Level:     1,
-					Status:    http.StatusBadRequest,
+					ErrorCode:       ErrInvalidData,
+					Level:           1,
+					GenericResponse: HTTPResponse(http.StatusBadRequest),
 				}
 			}
 
 			return &HTTPError{
-				Level:    3,
-				Status:   http.StatusInternalServerError,
-				IError:   err,
-				deviceid: rc.deviceid,
+				Level:           3,
+				GenericResponse: HTTPResponse(http.StatusInternalServerError),
+				IError:          err,
+				deviceid:        rc.deviceid,
 			}
 		}
 
-		ok := &OkResponse{Status: OK}
-
-		Send(ok, w)
+		Send(HTTPResponse(http.StatusOK), w)
 
 		return nil
 	}
@@ -462,19 +485,15 @@ func report() Handler {
 			}
 
 			return &HTTPError{
-				IError:    err,
-				ErrorCode: ErrInternal,
-				deviceid:  rc.deviceid,
-				Status:    http.StatusInternalServerError,
-				Level:     3,
+				IError:          err,
+				ErrorCode:       ErrInternal,
+				deviceid:        rc.deviceid,
+				GenericResponse: HTTPResponse(http.StatusInternalServerError),
+				Level:           3,
 			}
 		}
 
-		resp := OkResponse{
-			Status: OK,
-		}
-
-		Send(resp, w)
+		Send(HTTPResponse(http.StatusOK), w)
 
 		return nil
 	}
