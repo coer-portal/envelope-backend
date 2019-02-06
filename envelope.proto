@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+service Envelope {
+  rpc RegisterDevice(RegisterDeviceInput) returns (RegisterDeviceOutput) {}
+  rpc VerifyDevice(VerifyDeviceInput) returns (VerifyDeviceOutput) {}
+  rpc SubmitPost(SubmitPostInput) returns (SubmitPostOutput) {}
+}
+
+message RegisterDeviceInput {
+  string deviceid = 1;
+  int64 time = 2;
+}
+
+message RegisterDeviceOutput {
+  int32 code = 1;
+}
+
+message VerifyDeviceInput {
+  string deviceid = 2;
+}
+
+message VerifyDeviceOutput {
+  int32 code = 1;
+}
+
+message SubmitPostInput {
+  string post_id = 1;
+  string text = 2;
+  string device_id = 3;
+  int64 time = 4;
+}
+
+message SubmitPostOutput {
+  int32 code = 1;
+}
