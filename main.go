@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/ishanjain28/envelope-backend/db"
-	"github.com/ishanjain28/envelope-backend/log"
-	"github.com/ishanjain28/envelope-backend/router"
+	"github.com/envelope-app/envelope-backend/db"
+	"github.com/envelope-app/envelope-backend/log"
+	"github.com/envelope-app/envelope-backend/router"
 )
 
 var port = os.Getenv("PORT")

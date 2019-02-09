@@ -8,8 +8,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/envelope-app/envelope-backend/log"
 	"github.com/go-redis/redis"
-	"github.com/ishanjain28/envelope-backend/log"
 	"github.com/lib/pq"
 )
 
