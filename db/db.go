@@ -84,7 +84,7 @@ func Init() (IDB, error) {
 func (d *DB) SubmitPost(ctx context.Context, p *Post) error {
 
 	var id int
-	query := fmt.Sprintf("INSERT INTO posts(deviceid, post, timestamp, ipaddr) VALUES ('%s', '%s', '%d', '%s') RETURNING postid", p.DeviceID, p.Text, p.Timestamp, p.IPAddr)
+	query := fmt.Sprintf("INSERT INTO posts(deviceid, post, timestamp) VALUES ('%s', '%s', '%d', '%s') RETURNING postid", p.DeviceID, p.Text, p.Timestamp)
 
 	err := d.Pq.QueryRowContext(ctx, query).Scan(&id)
 	if err != nil {
@@ -261,11 +261,11 @@ func (d *DB) fetchLikes(ctx context.Context, postid string) (int, error) {
 
 func (d *DB) FetchPost(ctx context.Context, postid string) (*Post, error) {
 
-	query := fmt.Sprintf("SELECT postid, deviceid, post, timestamp, ipaddr FROM posts WHERE postid='%s'", postid)
+	query := fmt.Sprintf("SELECT postid, deviceid, post, timestamp FROM posts WHERE postid='%s'", postid)
 
 	p := &Post{}
 
-	err := d.Pq.QueryRowContext(ctx, query).Scan(&p.ID, &p.DeviceID, &p.Text, &p.Timestamp, &p.IPAddr)
+	err := d.Pq.QueryRowContext(ctx, query).Scan(&p.ID, &p.DeviceID, &p.Text, &p.Timestamp)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -288,7 +288,7 @@ func (d *DB) createTables() error {
 	}
 
 	log.Info.Println("Creating posts table")
-	err = d.createTableHelper("CREATE TABLE posts (postid SERIAL PRIMARY KEY, deviceid VARCHAR NOT NULL, post VARCHAR NOT NULL, timestamp INTEGER NOT NULL, ipaddr VARCHAR NOT NULL)")
+	err = d.createTableHelper("CREATE TABLE posts (postid SERIAL PRIMARY KEY, deviceid VARCHAR NOT NULL, post VARCHAR NOT NULL, timestamp INTEGER NOT NULL)")
 	if err != nil {
 		return err
 	}
@@ -307,6 +307,13 @@ func (d *DB) createTables() error {
 		return err
 	}
 	log.Info.Println("Created Likes Table")
+
+	log.Info.Println("Creating blocklist table")
+	err = d.createTableHelper("CREATE TABLE blocklist(deviceid VARCHAR PRIMARY KEY)")
+	if err != nil {
+		return err
+	}
+	log.Info.Println("Created blocklist Table")
 
 	log.Info.Printf("Tables Created...")
 

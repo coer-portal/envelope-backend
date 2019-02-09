@@ -1,3 +1,4 @@
 /vendor/github.com
 /vendor/golang.orgenvelope-backend
 pb/*
+envelope-backend

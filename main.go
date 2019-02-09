@@ -13,8 +13,7 @@ import (
 var port = os.Getenv("PORT")
 
 func main() {
-	log.Info.Printf("Starting Envelope Backend...\n")
-
+	log.Info.Println("Starting Envelope Backend...")
 	if port == "" {
 		log.Error.Fatalln("$PORT not set")
 	}

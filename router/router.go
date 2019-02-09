@@ -8,10 +8,10 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/gorilla/mux"
 	"github.com/envelope-app/envelope-backend/common"
 	"github.com/envelope-app/envelope-backend/db"
 	"github.com/envelope-app/envelope-backend/log"
+	"github.com/gorilla/mux"
 )
 
 const letterBytes = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -374,7 +374,6 @@ func submitPost() Handler {
 			DeviceID:  rc.deviceid,
 			Timestamp: timestamp,
 			Text:      post,
-			IPAddr:    fetchRemoteIpAddr(common.GetIPAddr(r)),
 		}
 
 		err := rc.db.SubmitPost(rc.ctx, p)

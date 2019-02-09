@@ -5,7 +5,6 @@ type Post struct {
 	Text      string `db:"post" json:"post"`
 	Timestamp int64  `db:"timestamp" json:"timestamp"`
 	DeviceID  string `db:"deviceid" json:"-"`
-	IPAddr    string `db:"ipAddr" json:"-"`
 	PostMeta
 }
 
