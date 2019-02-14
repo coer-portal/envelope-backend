@@ -8,7 +8,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/envelope-app/envelope-backend/common"
+	"github.com/envelope-app/envelope-backend/envelope"
+
 	"github.com/envelope-app/envelope-backend/db"
 	"github.com/envelope-app/envelope-backend/log"
 	"github.com/gorilla/mux"
@@ -19,6 +20,9 @@ const letterBytes = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 var (
 	workingRegion = "Uttarakhand"
 )
+
+type Router struct {
+}
 
 // RouterContext holds all the connections/information a request will need
 type RouterContext struct {
@@ -101,156 +105,79 @@ func Handle(pqre db.IDB, handlers ...Handler) http.Handler {
 	})
 }
 
-func Init(pqre db.IDB) *mux.Router {
-	r := mux.NewRouter()
+func (r *Router) RegisterDevice(ctx context.Context, input *envelope.RegisterDeviceInput) (*envelope.RegisterDeviceOutput, error) {
+	if input.Deviceid != "" {
+		return  &envelope.RegisterDeviceOutput{
+			Code: 400,
+		}, nil
+	}
 
-	/**
-	 * @api {post} /register-device Register a Device
-	 * @apiName RegisterDevice
-	 * @apiGroup Device
-	 *
-	 * @apiHeader {String} deviceid Unique Device ID
-	 *
-	 *
-	 * @apiSuccessExample {json} Success-Example:
-	 *		HTTP/1.1 200 Ok
-	 * 		{"hash":"XVlBzgbaiCMRAjWwhTHc","status":"OK","status_code":200}
-	 *
-	 * @apiErrorExample {json} Error-Example:
-	 *		HTTP/1.1 400 Bad Request
-	 * 		{"error_code":"NOT_FOUND","status":"Bad Request","status_code":400}
-	 *
-	 *		HTTP/1.1 500 Internal Server Error
-	 *		{"error_code":"INTERNAL_ERROR","status":"Internal Server Error","status_code:"500"}
-	 *
-	 *		HTTP/1.1 401 Unauthorized
-	 *		{"error_code":"OUT_OF_REGION","status":"Unauthorized","status_code:"401"}
-	 */
-	r.Handle("/register-device", Handle(pqre,
-		parseDeviceID(),
-		registerDevice(),
-	)).Methods("POST")
+	err = rc.db.RegisterDeviceID(rc.ctx, rc.deviceid, 0)
+	if err != nil {
+		return &envelope.RegisterDeviceOutput {
+			Code: 500,
+		}, nil
+	}
 
-	/**
-	 * @api {get} /verify-device Verify a Device
-	 * @apiName VerifyDevice
-	 * @apiGroup Device
-	 *
-	 * @apiHeader {String} deviceid Unique Device ID
-	 *
-	 *
-	 * @apiSuccessExample {json} Success-Example:
-	 *		HTTP/1.1 200 Ok
-	 * 		{"status":"OK","status_code":200}
-	 *
-	 * @apiErrorExample {json} Error-Example:
-	 *		HTTP/1.1 400 Bad Request
-	 * 		{"error_code":"EXPIRED","status":"Bad Request","status_code":400}
-	 *
-	 *		HTTP/1.1 500 Internal Server Error
-	 *		{"error_code":"INTERNAL_ERROR","status":"Internal Server Error","status_code:"500"}
-	 *
-	 *		HTTP/1.1 401 Unauthorized
-	 *		{"error_code":"NOT_REGISTERED","status":"Unauthorized","status_code:"401"}
-	 */
-	r.Handle("/verify-device", Handle(pqre,
-		parseDeviceID(),
-		verifyDevice(),
-	)).Methods("GET")
 
-	r.Handle("/report", Handle(pqre,
-		parseDeviceID(),
-		verifyDeviceID(),
-		parseForm(),
-		report(),
-	)).Methods("POST")
-
-	r.Handle("/submit-post", Handle(pqre,
-		parseDeviceID(),
-		verifyDeviceID(),
-		parseForm(),
-		submitPost(),
-	)).Methods("POST")
-
-	r.Handle("/edit-post", Handle(pqre,
-		parseDeviceID(),
-		verifyDeviceID(),
-		parseForm(),
-		editPost(),
-	)).Methods("POST")
-
-	r.Handle("/fetch/{tag}", Handle(pqre,
-		parseDeviceID(),
-		verifyDeviceID(),
-		fetchPost(),
-	)).Methods("GET")
-
-	r.Handle("/like-post", Handle(pqre,
-		parseDeviceID(),
-		verifyDeviceID(),
-		parseForm(),
-		likePost(),
-	)).Methods("POST")
-
-	r.Handle("/comment", Handle(pqre,
-		parseDeviceID(),
-		verifyDeviceID(),
-		parseForm(),
-	)).Methods("POST")
-
-	r.Handle("/fetch-comments", Handle(pqre,
-		parseDeviceID(),
-		verifyDeviceID(),
-	)).Methods("GET")
-
-	return r
+	return 	&envelope.RegisterDeviceOutput{
+		Code: 200,
+	}, w), nil
 }
 
-// registerDevice receives a deviceid via POST and puts it in redis for 2 months, And sends a Hash back in response
-func registerDevice() Handler {
-	return func(rc *RouterContext, w http.ResponseWriter, r *http.Request) *HTTPError {
+func Init(pqre db.IDB) Router {
+r := Router{}
 
-		// TODO: Add Context
-		_, err := common.GetRegionofIP(common.GetIPAddr(r))
-		if err != nil {
-			return &HTTPError{
-				ErrorCode:       ErrInternal,
-				Level:           3,
-				GenericResponse: HTTPResponse(http.StatusInternalServerError),
-				IError:          err,
-			}
-		}
+	// r.Handle("/verify-device", Handle(pqre,
+	// 	verifyDevice(),
+	// )).Methods("GET")
 
-		//		if region != workingRegion {
-		//			return &HTTPError{
-		//				ErrorCode: ErrOutOfValidRegion,
-		//				deviceid:  rc.deviceid,
-		//				IError:    errors.New(fmt.Sprintf("%s: %s is from %s", ErrOutOfValidRegion, common.GetIPAddr(r), region)),
-		//				Level:     3,
-		//				Status:    http.StatusUnauthorized,
-		//			}
-		//		}
+	// r.Handle("/report", Handle(pqre,
+	// 	parseDeviceID(),
+	// 	verifyDeviceID(),
+	// 	parseForm(),
+	// 	report(),
+	// )).Methods("POST")
 
-		h := RandomString(20)
+	// r.Handle("/submit-post", Handle(pqre,
+	// 	parseDeviceID(),
+	// 	verifyDeviceID(),
+	// 	parseForm(),
+	// 	submitPost(),
+	// )).Methods("POST")
 
-		// TODO: Set correct expiry time here
-		err = rc.db.RegisterDeviceID(rc.ctx, rc.deviceid, h, 0)
-		if err != nil {
-			return &HTTPError{
-				IError:          err,
-				Level:           3,
-				deviceid:        rc.deviceid,
-				ErrorCode:       ErrInternal,
-				GenericResponse: HTTPResponse(http.StatusInternalServerError),
-			}
-		}
+	// r.Handle("/edit-post", Handle(pqre,
+	// 	parseDeviceID(),
+	// 	verifyDeviceID(),
+	// 	parseForm(),
+	// 	editPost(),
+	// )).Methods("POST")
 
-		Send(RegisterDeviceResponse{
-			Hash:            h,
-			GenericResponse: HTTPResponse(http.StatusOK),
-		}, w)
-		return nil
-	}
+	// r.Handle("/fetch/{tag}", Handle(pqre,
+	// 	parseDeviceID(),
+	// 	verifyDeviceID(),
+	// 	fetchPost(),
+	// )).Methods("GET")
+
+	// r.Handle("/like-post", Handle(pqre,
+	// 	parseDeviceID(),
+	// 	verifyDeviceID(),
+	// 	parseForm(),
+	// 	likePost(),
+	// )).Methods("POST")
+
+	// r.Handle("/comment", Handle(pqre,
+	// 	parseDeviceID(),
+	// 	verifyDeviceID(),
+	// 	parseForm(),
+	// )).Methods("POST")
+
+	// r.Handle("/fetch-comments", Handle(pqre,
+	// 	parseDeviceID(),
+	// 	verifyDeviceID(),
+	// )).Methods("GET")
+
+	return r
 }
 
 // VerifyDevice verifies an existing deviceid
@@ -258,6 +185,7 @@ func registerDevice() Handler {
 // Input: Location, Device ID(deviceid), Hash(hash) in Query Parameters
 //
 // Output: {"Status": "OK"}
+// Don't need hash
 func verifyDevice() Handler {
 	return func(rc *RouterContext, w http.ResponseWriter, r *http.Request) *HTTPError {
 
@@ -496,13 +424,4 @@ func report() Handler {
 
 		return nil
 	}
-}
-
-func Send(v interface{}, w http.ResponseWriter) *HTTPError {
-	err := json.NewEncoder(w).Encode(v)
-	if err != nil {
-		return handleJSONError(err)
-	}
-
-	return nil
 }

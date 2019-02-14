@@ -23,20 +23,6 @@ func parseForm() Handler {
 	}
 }
 
-// parseDeviceID parses "deviceid" from query parameters in a GET request and from Form value in a POST request
-func parseDeviceID() Handler {
-	return func(rc *RouterContext, w http.ResponseWriter, r *http.Request) *HTTPError {
-
-		deviceid := r.Header.Get("deviceid")
-		if deviceid == "" {
-			return handleMissingDataError("deviceid")
-		}
-
-		rc.deviceid = deviceid
-		return nil
-	}
-}
-
 // verifyDeviceID is a middleware that can be plugged in to make sure the specified endpoint is only accessible to registered users
 func verifyDeviceID() Handler {
 	return func(rc *RouterContext, w http.ResponseWriter, r *http.Request) *HTTPError {

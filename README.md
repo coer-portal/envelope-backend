@@ -22,7 +22,7 @@ Before, Building, Be sure to set up environment variables correctly. If you are 
 
 Compiling proto service descriptor file
 
-    protoc --go_out=plugins=grpc:pb/ *.proto
+    protoc --go_out=plugins=grpc:envelope/ *.proto
 
 We prefer a multi stage docker container for docker based deployments.
 

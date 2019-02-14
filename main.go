@@ -1,13 +1,14 @@
 package main
 
 import (
-	"fmt"
-	"net/http"
+	"net"
 	"os"
 
 	"github.com/envelope-app/envelope-backend/db"
+	"github.com/envelope-app/envelope-backend/envelope"
 	"github.com/envelope-app/envelope-backend/log"
 	"github.com/envelope-app/envelope-backend/router"
+	"google.golang.org/grpc"
 )
 
 var port = os.Getenv("PORT")
@@ -25,9 +26,16 @@ func main() {
 
 	router := router.Init(dbs)
 
-	err = http.ListenAndServe(fmt.Sprintf(":%s", port), router)
-
+	conn, err := net.Listen("tcp", port)
 	if err != nil {
-		log.Error.Fatalln("%v: %s", err, err)
+		log.Error.Fatalln("error in listening on port", port)
+	}
+
+	grpcConn := grpc.NewServer()
+
+	envelope.RegisterEnvelopeServer(grpcConn, router)
+
+	if err := grpcConn.Serve(conn); err != nil {
+		log.Error.Fatalf("failed to serve: %v\n", err)
 	}
 }
